@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+message DiffMessage {
+  repeated Change changes = 1;
+}
+
+message Change {
+  string selector = 1;
+  Action action = 2;
+  string value = 3;
+  map<string, string> properties = 4;
+}
+
+enum Action {
+  UPDATE = 0;
+  APPEND = 1;
+  PREPEND = 2;
+  DELETE = 3;
+  UPDATE_PROPERTIES = 4;
+}
