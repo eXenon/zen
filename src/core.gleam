@@ -3,6 +3,7 @@ import gleam/dynamic
 import gleam/json
 import gleam/list
 import gleam/option
+import gleam/result
 import gleam/string_builder
 import gluid
 
@@ -16,12 +17,46 @@ pub type Msg(msg) {
   Navigate(String)
 }
 
+pub type EventHandler(msg) {
+  Click(fn() -> msg)
+  MouseOver(fn(#(Int, Int)) -> msg)
+}
+
+pub type EventHandlerError {
+  DecodeError
+}
+
+pub fn event_payload_decoder(
+  handler: EventHandler(msg),
+  payload: dynamic.Dynamic,
+) -> Result(msg, EventHandlerError) {
+  case handler {
+    Click(handler) -> Ok(handler())
+    MouseOver(handler) ->
+      case dynamic.tuple2(dynamic.int, dynamic.int)(payload) {
+        Ok(#(x, y)) -> Ok(handler(#(x, y)))
+        Error(_) -> Error(DecodeError)
+      }
+  }
+}
+
+pub type Event(msg) {
+  Event(id: String, handler: EventHandler(msg))
+}
+
+pub fn event_name(name: Event(msg)) -> String {
+  case name.handler {
+    Click(_) -> "click"
+    MouseOver(_) -> "mouseover"
+  }
+}
+
 pub type DomNode(msg) {
   Element(
     node: String,
     attributes: List(#(String, String)),
     children: List(DomNode(msg)),
-    events: List(#(String, String, fn() -> Msg(msg))),
+    events: List(Event(msg)),
   )
   Text(String)
 }
@@ -34,24 +69,27 @@ pub type App(model, msg) {
   App(
     init: fn() -> model,
     update: fn(model, Msg(msg)) -> model,
-    view: fn(model) -> View(msg),
-    events: dict.Dict(String, fn() -> Msg(msg)),
+    view: fn(model) -> View(Msg(msg)),
+    events: dict.Dict(String, EventHandler(Msg(msg))),
   )
 }
 
 pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg)) {
   let decoder =
-    dynamic.decode1(
-      fn(id) {
+    dynamic.decode2(
+      fn(id, payload) {
         let stored = dict.get(app.events, id)
-        case stored {
-          Ok(handler) -> handler()
-          Error(_) -> NoOp
-        }
+        use handler <- result.try(stored)
+        event_payload_decoder(handler, payload)
+        |> result.nil_error
       },
       dynamic.field("handler", dynamic.string),
+      dynamic.field("payload", dynamic.dynamic),
     )
+
   json.decode(using: decoder, from: raw)
+  |> result.nil_error
+  |> result.flatten()
   |> option.from_result()
 }
 
@@ -100,15 +138,12 @@ pub fn render_attribute(
   ])
 }
 
-pub fn render_event(
-  event: #(String, String, fn() -> Msg(msg)),
-) -> string_builder.StringBuilder {
-  let #(name, id, _handler) = event
+pub fn render_event(event: Event(msg)) -> string_builder.StringBuilder {
   string_builder.concat([
     string_builder.from_string("data-event=\""),
-    string_builder.from_string(name),
+    string_builder.from_string(event_name(event)),
     string_builder.from_string("\" data-event-handler=\""),
-    string_builder.from_string(id),
+    string_builder.from_string(event.id),
     string_builder.from_string("\""),
   ])
 }
@@ -144,9 +179,7 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
   ])
 }
 
-pub fn all_events(
-  node: DomNode(msg),
-) -> List(#(String, String, fn() -> Msg(msg))) {
+pub fn all_events(node: DomNode(msg)) -> List(Event(msg)) {
   case node {
     Element(_, _, children, events) ->
       list.concat([events, list.concat(list.map(children, all_events))])
@@ -157,16 +190,11 @@ pub fn all_events(
 pub fn build_view(
   app: App(model, msg),
   model: model,
-) -> #(App(model, msg), View(msg)) {
+) -> #(App(model, msg), View(Msg(msg))) {
   let view = app.view(model)
   let events = all_events(view.body)
   let registry =
-    dict.from_list(
-      list.map(events, fn(event) {
-        let #(_name, id, handler) = event
-        #(id, handler)
-      }),
-    )
+    dict.from_list(list.map(events, fn(event) { #(event.id, event.handler) }))
   #(App(..app, events: registry), view)
 }
 
