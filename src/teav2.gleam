@@ -2,20 +2,30 @@ import core
 import demo
 import gleam/bytes_builder
 import gleam/erlang/process
+import gleam/function
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/io
 import gleam/json
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
+import gleam/otp/task
 import gleam/result
 import gleam/string
 import gleam/string_builder
 import mist.{type Connection, type ResponseData}
 
+pub type ServerSubjects(msg) {
+  ServerSubjects(
+    self: process.Subject(ServerSideMessage(msg)),
+    broadcast: process.Subject(ServerSideMessage(msg)),
+  )
+}
+
 pub fn main() {
   // These values are for the Websocket process initialized below
-  let selector = process.new_selector()
+  let broadcast_subject = process.new_subject()
 
   // Demo app
   let app = demo.demo()
@@ -30,13 +40,21 @@ pub fn main() {
     fn(req: Request(Connection)) -> Response(ResponseData) {
       case request.path_segments(req) {
         [] -> send_view(req, view)
-        ["ws"] ->
+        ["ws"] -> {
+          let self_subject = process.new_subject()
+          let selector =
+            process.new_selector()
+            |> process.selecting(broadcast_subject, function.identity)
+            |> process.selecting(self_subject, function.identity)
+          let subjects =
+            ServerSubjects(self: self_subject, broadcast: broadcast_subject)
           mist.websocket(
             request: req,
-            on_init: fn(_conn) { #(#(app, state), Some(selector)) },
+            on_init: fn(_conn) { #(#(app, state, subjects), Some(selector)) },
             on_close: fn(_state) { io.println("goodbye!") },
             handler: handle_ws_message,
           )
+        }
         ["file", ..rest] -> serve_file(req, rest)
 
         _ -> not_found
@@ -49,12 +67,43 @@ pub fn main() {
   process.sleep_forever()
 }
 
-pub type MyMessage {
-  Broadcast(String)
+pub type ServerSideMessage(msg) {
+  EffectFeedback(core.Msg(msg))
+}
+
+fn handle_msg(
+  conn: mist.WebsocketConnection,
+  subjects: ServerSubjects(msg),
+  app: core.App(model, msg),
+  state: model,
+  msg: core.Msg(msg),
+) {
+  let #(new_state, effects) = core.update(app, state, msg)
+  let #(new_app, view) = core.build_view(app, new_state)
+  let message =
+    view
+    |> core.render()
+    |> string_builder.to_string
+    |> json.string()
+    |> fn(body) { [#("body", body)] }
+    |> json.object()
+    |> json.to_string()
+  let assert Ok(_) = mist.send_text_frame(conn, message)
+
+  // Run effects
+  list.map(effects, fn(effect) {
+    task.async(fn() {
+      let core.Effect(f) = effect
+      let msg = f()
+      process.send(subjects.self, EffectFeedback(msg))
+    })
+  })
+
+  #(new_app, new_state)
 }
 
 fn handle_ws_message(tea, conn, message) {
-  let #(app, state) = tea
+  let #(app, state, subjects) = tea
   case message {
     mist.Text("ping") -> {
       let assert Ok(_) = mist.send_text_frame(conn, "pong")
@@ -63,21 +112,13 @@ fn handle_ws_message(tea, conn, message) {
 
     mist.Text(incoming) -> {
       case core.deserialize(app, incoming) {
-        Some(event) -> {
-          let new_state = core.update(app, state, event)
-          let #(new_app, view) = core.build_view(app, new_state)
-          let message =
-            view
-            |> core.render()
-            |> string_builder.to_string
-            |> json.string()
-            |> fn(body) { [#("body", body)] }
-            |> json.object()
-            |> json.to_string()
-          let assert Ok(_) = mist.send_text_frame(conn, message)
-          actor.continue(#(new_app, new_state))
+        Some(msg) -> {
+          let #(new_app, new_state) =
+            handle_msg(conn, subjects, app, state, msg)
+          actor.continue(#(new_app, new_state, subjects))
         }
         None -> {
+          io.println("error: could not deserialize message " <> incoming)
           actor.continue(tea)
         }
       }
@@ -87,9 +128,9 @@ fn handle_ws_message(tea, conn, message) {
       actor.continue(tea)
     }
 
-    mist.Custom(Broadcast(text)) -> {
-      let assert Ok(_) = mist.send_text_frame(conn, text)
-      actor.continue(tea)
+    mist.Custom(EffectFeedback(msg)) -> {
+      let #(new_app, new_state) = handle_msg(conn, subjects, app, state, msg)
+      actor.continue(#(new_app, new_state, subjects))
     }
 
     mist.Closed | mist.Shutdown -> actor.Stop(process.Normal)

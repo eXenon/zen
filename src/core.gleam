@@ -1,15 +1,12 @@
+import dom
 import gleam/dict
 import gleam/dynamic
+import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option
 import gleam/result
 import gleam/string_builder
-import gluid
-
-pub fn uuid() -> String {
-  gluid.guidv4()
-}
 
 pub type Msg(msg) {
   Custom(msg)
@@ -17,60 +14,20 @@ pub type Msg(msg) {
   Navigate(String)
 }
 
-pub type EventHandler(msg) {
-  Click(fn() -> msg)
-  MouseOver(fn(#(Int, Int)) -> msg)
-}
-
-pub type EventHandlerError {
-  DecodeError
-}
-
-pub fn event_payload_decoder(
-  handler: EventHandler(msg),
-  payload: dynamic.Dynamic,
-) -> Result(msg, EventHandlerError) {
-  case handler {
-    Click(handler) -> Ok(handler())
-    MouseOver(handler) ->
-      case dynamic.tuple2(dynamic.int, dynamic.int)(payload) {
-        Ok(#(x, y)) -> Ok(handler(#(x, y)))
-        Error(_) -> Error(DecodeError)
-      }
-  }
-}
-
-pub type Event(msg) {
-  Event(id: String, handler: EventHandler(msg))
-}
-
-pub fn event_name(name: Event(msg)) -> String {
-  case name.handler {
-    Click(_) -> "click"
-    MouseOver(_) -> "mouseover"
-  }
-}
-
-pub type DomNode(msg) {
-  Element(
-    node: String,
-    attributes: List(#(String, String)),
-    children: List(DomNode(msg)),
-    events: List(Event(msg)),
-  )
-  Text(String)
-}
-
 pub type View(msg) {
-  View(title: String, body: DomNode(msg))
+  View(title: String, body: dom.DomNode(msg))
+}
+
+pub type Effect(msg) {
+  Effect(fn() -> Msg(msg))
 }
 
 pub type App(model, msg) {
   App(
     init: fn() -> model,
-    update: fn(model, Msg(msg)) -> model,
+    update: fn(model, Msg(msg)) -> #(model, List(Effect(msg))),
     view: fn(model) -> View(Msg(msg)),
-    events: dict.Dict(String, EventHandler(Msg(msg))),
+    events: dict.Dict(String, dom.EventHandler(Msg(msg))),
   )
 }
 
@@ -80,7 +37,7 @@ pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg))
       fn(id, payload) {
         let stored = dict.get(app.events, id)
         use handler <- result.try(stored)
-        event_payload_decoder(handler, payload)
+        dom.event_payload_decoder(handler, payload)
         |> result.nil_error
       },
       dynamic.field("handler", dynamic.string),
@@ -138,19 +95,19 @@ pub fn render_attribute(
   ])
 }
 
-pub fn render_event(event: Event(msg)) -> string_builder.StringBuilder {
+pub fn render_event(event: dom.Event(msg)) -> string_builder.StringBuilder {
   string_builder.concat([
     string_builder.from_string("data-event=\""),
-    string_builder.from_string(event_name(event)),
+    string_builder.from_string(dom.event_name(event)),
     string_builder.from_string("\" data-event-handler=\""),
     string_builder.from_string(event.id),
     string_builder.from_string("\""),
   ])
 }
 
-pub fn render_node(node: DomNode(msg)) -> string_builder.StringBuilder {
+pub fn render_node(node: dom.DomNode(msg)) -> string_builder.StringBuilder {
   case node {
-    Element(node, attributes, children, events) ->
+    dom.Element(node, attributes, children, events) ->
       string_builder.concat([
         string_builder.from_string("<"),
         string_builder.from_string(node),
@@ -164,7 +121,7 @@ pub fn render_node(node: DomNode(msg)) -> string_builder.StringBuilder {
         string_builder.from_string(node),
         string_builder.from_string(">"),
       ])
-    Text(text) -> string_builder.from_string(text)
+    dom.Text(text) -> string_builder.from_string(text)
   }
 }
 
@@ -179,11 +136,11 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
   ])
 }
 
-pub fn all_events(node: DomNode(msg)) -> List(Event(msg)) {
+pub fn all_events(node: dom.DomNode(msg)) -> List(dom.Event(msg)) {
   case node {
-    Element(_, _, children, events) ->
+    dom.Element(_, _, children, events) ->
       list.concat([events, list.concat(list.map(children, all_events))])
-    Text(_) -> []
+    dom.Text(_) -> []
   }
 }
 
@@ -198,6 +155,10 @@ pub fn build_view(
   #(App(..app, events: registry), view)
 }
 
-pub fn update(app: App(model, msg), model: model, msg: Msg(msg)) -> model {
+pub fn update(
+  app: App(model, msg),
+  model: model,
+  msg: Msg(msg),
+) -> #(model, List(Effect(msg))) {
   app.update(model, msg)
 }

@@ -84,6 +84,24 @@ function applyDiff(diff) {
   }
 }
 
+function payloadForEvent(eventName, event) {
+  switch (eventName) {
+    case 'click':
+      console.log('click event', event);
+      return {
+        x: event.clientX,
+        y: event.clientY
+      };
+    case 'mouseover':
+      return {
+        x: event.clientX,
+        y: event.clientY
+      };
+    default:
+      return {};
+  }
+}
+
 function setEventListeners(ws) {
   const targets = document.querySelectorAll('[data-event]');
   for (const target of targets) {
@@ -93,8 +111,8 @@ function setEventListeners(ws) {
       console.log('Sending event to server:', eventName, event);
       ws.send(JSON.stringify({
         handler: handler,
-        target: event.target.id,
-        data: event.detail
+        name: eventName,
+        payload: payloadForEvent(eventName, event)
       }));
     };
     console.log('Setting event listener for', eventName, 'on', target);

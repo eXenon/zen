@@ -16,30 +16,35 @@ pub fn init() -> Model {
   Model(count: 0, position: #(0, 0))
 }
 
-pub fn update(model: Model, msg: core.Msg(Msg)) -> Model {
-  case msg {
-    core.Custom(Increment) -> Model(..model, count: model.count + 1)
-    core.Custom(Decrement) -> Model(..model, count: model.count - 1)
-    core.Custom(MouseOver(pos)) -> Model(..model, position: pos)
-    _ -> model
-  }
+pub fn update(
+  model: Model,
+  msg: core.Msg(Msg),
+) -> #(Model, List(core.Effect(Msg))) {
+  #(
+    case msg {
+      core.Custom(Increment) -> Model(..model, count: model.count + 1)
+      core.Custom(Decrement) -> Model(..model, count: model.count - 1)
+      core.Custom(MouseOver(pos)) -> Model(..model, position: pos)
+      _ -> model
+    },
+    [],
+  )
 }
 
 pub fn view(model: Model) -> core.View(core.Msg(Msg)) {
   let #(x, y) = model.position
   core.View(
     title: "Demo",
-    body: dom.div(
-      [],
-      [
-        dom.button([], [dom.text("Increment")], fn() { core.Custom(Increment) }),
-        dom.text(
-          to_string(model.count) <> " " <> to_string(x) <> " " <> to_string(y),
-        ),
-        dom.button([], [dom.text("Decrement")], fn() { core.Custom(Decrement) }),
-      ],
-      fn(pos) { core.Custom(MouseOver(pos)) },
-    ),
+    body: dom.div([], [
+      dom.button([], [dom.text("Increment")])
+        |> dom.on_click(fn() { core.Custom(Increment) }),
+      dom.text(
+        to_string(model.count) <> " " <> to_string(x) <> " " <> to_string(y),
+      ),
+      dom.button([], [dom.text("Decrement")])
+        |> dom.on_click(fn() { core.Custom(Decrement) }),
+    ])
+      |> dom.on_mouse_over(fn(pos) { core.Custom(MouseOver(#(pos.x, pos.y))) }),
   )
 }
 
