@@ -1,15 +1,29 @@
+import gleam/dict
 import gleam/dynamic
 import gleam/erlang/node
 import gluid
 
 // Types
 
+pub type Id {
+  Id(String)
+}
+
+pub type Node {
+  Node(String)
+}
+
+pub type Attribute {
+  Attribute(name: String, value: String)
+}
+
 pub type DomNode(msg) {
   Element(
-    node: String,
-    attributes: List(#(String, String)),
+    id: Id,
+    node: Node,
+    attributes: List(Attribute),
     children: List(DomNode(msg)),
-    events: List(Event(msg)),
+    events: dict.Dict(String, EventHandler(msg)),
   )
   Text(String)
 }
@@ -25,6 +39,14 @@ pub type EventHandler(msg) {
 
 pub type EventHandlerError {
   DecodeError
+}
+
+pub type EventStore(msg) {
+  EventStore(dict.Dict(Id, dict.Dict(String, EventHandler(msg))))
+}
+
+pub fn empty_event_store() -> EventStore(msg) {
+  EventStore(dict.from_list([]))
 }
 
 // Event related functions
@@ -62,25 +84,16 @@ pub fn event_name(name: Event(msg)) -> String {
 
 // Builders
 
-pub fn make_click_event(handler: fn() -> msg) -> Event(msg) {
-  let id = gluid.guidv4()
-  Event(id, Click(handler))
-}
-
-pub fn make_mouse_over_event(
-  handler: fn(EventPayloadCoordinates) -> msg,
-) -> Event(msg) {
-  let id = gluid.guidv4()
-  Event(id, MouseOver(handler))
-}
-
 pub fn on_click(node: DomNode(msg), handler: fn() -> msg) -> DomNode(msg) {
   case node {
-    Element(n, a, c, e) ->
-      Element(node: n, attributes: a, children: c, events: [
-        make_click_event(handler),
-        ..e
-      ])
+    Element(i, n, a, c, e) ->
+      Element(
+        id: i,
+        node: n,
+        attributes: a,
+        children: c,
+        events: dict.insert(e, "click", Click(handler)),
+      )
     Text(_) -> node
   }
 }
@@ -90,11 +103,14 @@ pub fn on_mouse_over(
   handler: fn(EventPayloadCoordinates) -> msg,
 ) -> DomNode(msg) {
   case node {
-    Element(n, a, c, e) ->
-      Element(node: n, attributes: a, children: c, events: [
-        make_mouse_over_event(handler),
-        ..e
-      ])
+    Element(i, n, a, c, e) ->
+      Element(
+        id: i,
+        node: n,
+        attributes: a,
+        children: c,
+        events: dict.insert(e, "mouseover", MouseOver(handler)),
+      )
     Text(_) -> node
   }
 }
@@ -102,17 +118,19 @@ pub fn on_mouse_over(
 // Convenience functions
 
 pub fn div(
-  attributes: List(#(String, String)),
+  attributes: List(Attribute),
   children: List(DomNode(msg)),
 ) -> DomNode(msg) {
-  Element("div", attributes, children, [])
+  let id = Id(gluid.guidv4())
+  Element(id, Node("div"), attributes, children, dict.from_list([]))
 }
 
 pub fn button(
-  attributes: List(#(String, String)),
+  attributes: List(Attribute),
   children: List(DomNode(msg)),
 ) -> DomNode(msg) {
-  Element("button", attributes, children, [])
+  let id = Id(gluid.guidv4())
+  Element(id, Node("button"), attributes, children, dict.from_list([]))
 }
 
 pub fn text(text: String) -> DomNode(msg) {

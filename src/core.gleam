@@ -27,20 +27,23 @@ pub type App(model, msg) {
     init: fn() -> model,
     update: fn(model, Msg(msg)) -> #(model, List(Effect(msg))),
     view: fn(model) -> View(Msg(msg)),
-    events: dict.Dict(String, dom.EventHandler(Msg(msg))),
+    events: dom.EventStore(Msg(msg)),
   )
 }
 
 pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg)) {
   let decoder =
-    dynamic.decode2(
-      fn(id, payload) {
-        let stored = dict.get(app.events, id)
-        use handler <- result.try(stored)
+    dynamic.decode3(
+      fn(id, name, payload) {
+        let dom.EventStore(events) = app.events
+        let stored = dict.get(events, dom.Id(id))
+        use events_for_id <- result.try(stored)
+        use handler <- result.try(dict.get(events_for_id, name))
         dom.event_payload_decoder(handler, payload)
         |> result.nil_error
       },
       dynamic.field("handler", dynamic.string),
+      dynamic.field("name", dynamic.string),
       dynamic.field("payload", dynamic.dynamic),
     )
 
@@ -80,13 +83,13 @@ pub fn suffix() -> string_builder.StringBuilder {
 }
 
 pub fn app(init, update, view) -> App(model, msg) {
-  App(init, update, view, dict.from_list([]))
+  App(init, update, view, dom.empty_event_store())
 }
 
 pub fn render_attribute(
-  attribute: #(String, String),
+  attribute: dom.Attribute,
 ) -> string_builder.StringBuilder {
-  let #(name, value) = attribute
+  let dom.Attribute(name, value) = attribute
   string_builder.concat([
     string_builder.from_string(name),
     string_builder.from_string("=\""),
@@ -95,26 +98,27 @@ pub fn render_attribute(
   ])
 }
 
-pub fn render_event(event: dom.Event(msg)) -> string_builder.StringBuilder {
+pub fn render_event(event_name: String) -> string_builder.StringBuilder {
   string_builder.concat([
     string_builder.from_string("data-event=\""),
-    string_builder.from_string(dom.event_name(event)),
-    string_builder.from_string("\" data-event-handler=\""),
-    string_builder.from_string(event.id),
+    string_builder.from_string(event_name),
     string_builder.from_string("\""),
   ])
 }
 
 pub fn render_node(node: dom.DomNode(msg)) -> string_builder.StringBuilder {
   case node {
-    dom.Element(node, attributes, children, events) ->
+    dom.Element(dom.Id(id), dom.Node(node), attributes, children, events) ->
       string_builder.concat([
         string_builder.from_string("<"),
         string_builder.from_string(node),
         string_builder.from_string(" "),
+        string_builder.from_string("id=\""),
+        string_builder.from_string(id),
+        string_builder.from_string("\" "),
         string_builder.concat(list.map(attributes, render_attribute)),
         string_builder.from_string(" "),
-        string_builder.concat(list.map(events, render_event)),
+        string_builder.concat(list.map(dict.keys(events), render_event)),
         string_builder.from_string(">"),
         string_builder.concat(list.map(children, render_node)),
         string_builder.from_string("</"),
@@ -136,10 +140,14 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
   ])
 }
 
-pub fn all_events(node: dom.DomNode(msg)) -> List(dom.Event(msg)) {
+pub fn all_events(
+  node: dom.DomNode(msg),
+) -> List(#(dom.Id, dict.Dict(String, dom.EventHandler(msg)))) {
   case node {
-    dom.Element(_, _, children, events) ->
-      list.concat([events, list.concat(list.map(children, all_events))])
+    dom.Element(id, _, _, children, events) -> [
+      #(id, events),
+      ..list.concat(list.map(children, all_events))
+    ]
     dom.Text(_) -> []
   }
 }
@@ -150,8 +158,7 @@ pub fn build_view(
 ) -> #(App(model, msg), View(Msg(msg))) {
   let view = app.view(model)
   let events = all_events(view.body)
-  let registry =
-    dict.from_list(list.map(events, fn(event) { #(event.id, event.handler) }))
+  let registry = dom.EventStore(dict.from_list(events))
   #(App(..app, events: registry), view)
 }
 

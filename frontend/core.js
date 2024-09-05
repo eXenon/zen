@@ -106,7 +106,7 @@ function setEventListeners(ws) {
   const targets = document.querySelectorAll('[data-event]');
   for (const target of targets) {
     const eventName = target.getAttribute('data-event');
-    const handler = target.getAttribute('data-event-handler');
+    const handler = target.getAttribute('id');
     const eventHandler = (event) => {
       console.log('Sending event to server:', eventName, event);
       ws.send(JSON.stringify({
