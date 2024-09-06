@@ -102,11 +102,15 @@ function payloadForEvent(eventName, event) {
   }
 }
 
+function stringToIntList(str) {
+  return str ? str.split('-').map(num => parseInt(num, 10)) : [];
+}
+
 function setEventListeners(ws) {
   const targets = document.querySelectorAll('[data-event]');
   for (const target of targets) {
     const eventName = target.getAttribute('data-event');
-    const handler = target.getAttribute('id');
+    const handler = stringToIntList(target.getAttribute('id'));
     const eventHandler = (event) => {
       console.log('Sending event to server:', eventName, event);
       ws.send(JSON.stringify({

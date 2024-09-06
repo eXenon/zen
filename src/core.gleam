@@ -1,6 +1,7 @@
 import dom
 import gleam/dict
 import gleam/dynamic
+import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
@@ -42,7 +43,7 @@ pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg))
         dom.event_payload_decoder(handler, payload)
         |> result.nil_error
       },
-      dynamic.field("handler", dynamic.string),
+      dynamic.field("handler", dynamic.list(dynamic.int)),
       dynamic.field("name", dynamic.string),
       dynamic.field("payload", dynamic.dynamic),
     )
@@ -106,21 +107,36 @@ pub fn render_event(event_name: String) -> string_builder.StringBuilder {
   ])
 }
 
-pub fn render_node(node: dom.DomNode(msg)) -> string_builder.StringBuilder {
+pub fn render_id(id: dom.Id) -> string_builder.StringBuilder {
+  let dom.Id(id) = id
+  string_builder.join(
+    list.map(id, fn(i) { string_builder.from_string(int.to_string(i)) }),
+    "-",
+  )
+}
+
+pub fn render_node(
+  current_id: dom.Id,
+  node: dom.DomNode(msg),
+) -> string_builder.StringBuilder {
   case node {
-    dom.Element(dom.Id(id), dom.Node(node), attributes, children, events) ->
+    dom.Element(dom.Node(node), attributes, children, events) ->
       string_builder.concat([
         string_builder.from_string("<"),
         string_builder.from_string(node),
-        string_builder.from_string(" "),
-        string_builder.from_string("id=\""),
-        string_builder.from_string(id),
+        string_builder.from_string(" id=\""),
+        render_id(current_id),
         string_builder.from_string("\" "),
         string_builder.concat(list.map(attributes, render_attribute)),
         string_builder.from_string(" "),
         string_builder.concat(list.map(dict.keys(events), render_event)),
         string_builder.from_string(">"),
-        string_builder.concat(list.map(children, render_node)),
+        string_builder.concat(
+          list.index_map(children, fn(n, i) {
+            let child_id = dom.child(current_id, i)
+            render_node(child_id, n)
+          }),
+        ),
         string_builder.from_string("</"),
         string_builder.from_string(node),
         string_builder.from_string(">"),
@@ -135,18 +151,24 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
     prefix(),
     string_builder.from_string(title),
     middle(),
-    render_node(body),
+    render_node(dom.root(), body),
     suffix(),
   ])
 }
 
 pub fn all_events(
+  id: dom.Id,
   node: dom.DomNode(msg),
 ) -> List(#(dom.Id, dict.Dict(String, dom.EventHandler(msg)))) {
   case node {
-    dom.Element(id, _, _, children, events) -> [
+    dom.Element(_, _, children, events) -> [
       #(id, events),
-      ..list.concat(list.map(children, all_events))
+      ..list.concat(
+        list.index_map(children, fn(n, i) {
+          let child_id = dom.child(id, i)
+          all_events(child_id, n)
+        }),
+      )
     ]
     dom.Text(_) -> []
   }
@@ -157,7 +179,7 @@ pub fn build_view(
   model: model,
 ) -> #(App(model, msg), View(Msg(msg))) {
   let view = app.view(model)
-  let events = all_events(view.body)
+  let events = all_events(dom.root(), view.body)
   let registry = dom.EventStore(dict.from_list(events))
   #(App(..app, events: registry), view)
 }
