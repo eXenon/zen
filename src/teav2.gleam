@@ -1,5 +1,6 @@
 import core
 import demo
+import dom
 import gleam/bytes_builder
 import gleam/erlang/process
 import gleam/function
@@ -50,7 +51,9 @@ pub fn main() {
             ServerSubjects(self: self_subject, broadcast: broadcast_subject)
           mist.websocket(
             request: req,
-            on_init: fn(_conn) { #(#(app, state, subjects), Some(selector)) },
+            on_init: fn(_conn) {
+              #(#(app, state, view, subjects), Some(selector))
+            },
             on_close: fn(_state) { io.println("goodbye!") },
             handler: handle_ws_message,
           )
@@ -76,19 +79,26 @@ fn handle_msg(
   subjects: ServerSubjects(msg),
   app: core.App(model, msg),
   state: model,
+  prev_view: core.View(core.Msg(msg)),
   msg: core.Msg(msg),
 ) {
   let #(new_state, effects) = core.update(app, state, msg)
   let #(new_app, view) = core.build_view(app, new_state)
-  let message =
-    view
-    |> core.render()
-    |> string_builder.to_string
-    |> json.string()
-    |> fn(body) { [#("body", body)] }
-    |> json.object()
-    |> json.to_string()
-  let assert Ok(_) = mist.send_text_frame(conn, message)
+  let diffs = core.diff(prev_view, view)
+  let message = case diffs {
+    [] -> []
+    _ ->
+      diffs
+      |> json.array(of: dom.encode)
+      |> fn(diffs) { [#("diff", diffs)] }
+      |> json.object()
+      |> json.to_string()
+      |> fn(m) { [m] }
+  }
+
+  let assert Ok(_) =
+    list.map(message, with: mist.send_text_frame(conn, _))
+    |> result.all
 
   // Run effects
   list.map(effects, fn(effect) {
@@ -99,11 +109,11 @@ fn handle_msg(
     })
   })
 
-  #(new_app, new_state)
+  #(new_app, new_state, view)
 }
 
 fn handle_ws_message(tea, conn, message) {
-  let #(app, state, subjects) = tea
+  let #(app, state, prev_view, subjects) = tea
   case message {
     mist.Text("ping") -> {
       let assert Ok(_) = mist.send_text_frame(conn, "pong")
@@ -113,9 +123,9 @@ fn handle_ws_message(tea, conn, message) {
     mist.Text(incoming) -> {
       case core.deserialize(app, incoming) {
         Some(msg) -> {
-          let #(new_app, new_state) =
-            handle_msg(conn, subjects, app, state, msg)
-          actor.continue(#(new_app, new_state, subjects))
+          let #(new_app, new_state, new_view) =
+            handle_msg(conn, subjects, app, state, prev_view, msg)
+          actor.continue(#(new_app, new_state, new_view, subjects))
         }
         None -> {
           io.println("error: could not deserialize message " <> incoming)
@@ -129,8 +139,9 @@ fn handle_ws_message(tea, conn, message) {
     }
 
     mist.Custom(EffectFeedback(msg)) -> {
-      let #(new_app, new_state) = handle_msg(conn, subjects, app, state, msg)
-      actor.continue(#(new_app, new_state, subjects))
+      let #(new_app, new_state, new_view) =
+        handle_msg(conn, subjects, app, state, prev_view, msg)
+      actor.continue(#(new_app, new_state, new_view, subjects))
     }
 
     mist.Closed | mist.Shutdown -> actor.Stop(process.Normal)

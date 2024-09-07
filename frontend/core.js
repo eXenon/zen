@@ -2,6 +2,7 @@ function openWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
   const ws = new WebSocket(`${protocol}//${host}/ws`);
+  const HEARTBEAT_INTERVAL = 10000;
 
   ws.onopen = () => {
     console.log('WebSocket connection established');
@@ -11,7 +12,7 @@ function openWebSocket() {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send("ping");
       }
-    }, 1000);
+    }, HEARTBEAT_INTERVAL);
   };
 
   ws.onmessage = (event) => {
@@ -51,7 +52,7 @@ function apply(message) {
 
 function applyDiff(diff) {
   for (const change of diff) {
-    const element = document.querySelector(change.selector);
+    const element = findNodeByIntList(change.selector);
     if (element) {
       switch (change.action) {
         case 'update':
@@ -74,6 +75,9 @@ function applyDiff(diff) {
               element.setAttribute(key, value);
             }
           }
+          break;
+        case 'updatetext':
+          element.textContent = change.value;
           break;
         default:
           console.error('Unknown diff action:', change.action);
@@ -106,21 +110,65 @@ function stringToIntList(str) {
   return str ? str.split('-').map(num => parseInt(num, 10)) : [];
 }
 
+function idToPath(id) {
+  if (id === 'root') {
+    return [];
+  } else {
+    return stringToIntList(id);
+  }
+}
+
+function findNodeByIntList(intList) {
+  let node = document.getElementById('root'); // Start at the root
+  if (intList == "root") {
+    return node
+  }
+
+  const reversedList = [...intList].reverse();
+  
+  for (const index of reversedList) {
+    if (node.childNodes.length > index) {
+      console.log("node", node, "index", index, "child", node.childNodes[index])
+      node = node.childNodes[index];
+    } else {
+      console.error('Invalid path: child index out of bounds', index);
+      return null;
+    }
+  }
+  
+  return node;
+}
+
+function pathToHandler(path) {
+  if (path.length == 0) {
+    return "root"
+  }
+  return path
+}
+
 function setEventListeners(ws) {
   const targets = document.querySelectorAll('[data-event]');
   for (const target of targets) {
     const eventName = target.getAttribute('data-event');
-    const handler = stringToIntList(target.getAttribute('id'));
-    const eventHandler = (event) => {
-      console.log('Sending event to server:', eventName, event);
-      ws.send(JSON.stringify({
-        handler: handler,
-        name: eventName,
-        payload: payloadForEvent(eventName, event)
-      }));
-    };
-    console.log('Setting event listener for', eventName, 'on', target);
-    target.addEventListener(eventName, eventHandler);
+    const path = idToPath(target.getAttribute('id'));
+    const handler = pathToHandler(path);
+    
+    // Check if the event listener is already set
+    if (!target.hasAttribute('data-listener-' + eventName + '-set')) {
+      const eventHandler = (event) => {
+        console.log('Sending event to server:', eventName, event);
+        ws.send(JSON.stringify({
+          handler: handler,
+          name: eventName,
+          payload: payloadForEvent(eventName, event)
+        }));
+      };
+      console.log('Setting event listener for', eventName, 'on', target);
+      target.addEventListener(eventName, eventHandler);
+      
+      // Mark this element as having a listener set
+      target.setAttribute('data-listener-' + eventName + '-set', 'true');
+    }
   }
 }
 

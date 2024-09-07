@@ -1,42 +1,78 @@
 import gleam/dict
 import gleam/dynamic
 import gleam/erlang/node
+import gleam/function
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
+import gleam/string
+import gleam/string_builder
 import gluid
 import utils
 
 // Types
 
 pub type Id {
-  Id(List(Int))
+  Root
+  Node(List(Int))
 }
 
 pub fn root() -> Id {
-  Id([])
+  Root
 }
 
 pub fn child(parent: Id, index: Int) -> Id {
-  let Id(parent_id) = parent
-  Id([index, ..parent_id])
+  case parent {
+    Root -> Node([index])
+    Node(p) -> Node([index, ..p])
+  }
 }
 
 pub fn parent(child: Id) -> Id {
-  let Id(child_id) = child
-  case child_id {
-    [_, ..parent_id] -> Id(parent_id)
-    [] -> Id([])
+  case child {
+    Root -> Root
+    Node([_, ..parent_path]) -> Node(parent_path)
+    Node([]) -> Root
   }
 }
 
 pub fn encode_id(id: Id) -> json.Json {
-  let Id(id) = id
-  json.array(id, json.int)
+  case id {
+    Root -> json.string("root")
+    Node(path) -> json.array(path, json.int)
+  }
+}
+
+pub fn print_id(id: Id) -> String {
+  case id {
+    Root -> "root"
+    Node(path) -> string.join(list.map(path, int.to_string), "-")
+  }
+}
+
+pub fn id_decoder() {
+  dynamic.any([
+    fn(d) {
+      dynamic.string(d)
+      |> result.try(fn(s) {
+        case s {
+          "root" -> Ok(Root)
+          _ ->
+            Error([dynamic.DecodeError(expected: "root", found: s, path: [])])
+        }
+      })
+    },
+    fn(d) {
+      dynamic.list(of: dynamic.int)(d)
+      |> result.map(Node)
+    },
+  ])
 }
 
 pub type Node {
-  Node(String)
+  N(String)
 }
 
 pub type Attribute {
@@ -107,10 +143,61 @@ pub fn event_name(name: Event(msg)) -> String {
   }
 }
 
+// Rendering logic
+
+pub fn render_attribute(attribute: Attribute) -> string_builder.StringBuilder {
+  let Attribute(name, value) = attribute
+  string_builder.concat([
+    string_builder.from_string(name),
+    string_builder.from_string("=\""),
+    string_builder.from_string(value),
+    string_builder.from_string("\""),
+  ])
+}
+
+pub fn render_event(event_name: String) -> string_builder.StringBuilder {
+  string_builder.concat([
+    string_builder.from_string("data-event=\""),
+    string_builder.from_string(event_name),
+    string_builder.from_string("\""),
+  ])
+}
+
+pub fn render_node(
+  current_id: Id,
+  node: DomNode(msg),
+) -> string_builder.StringBuilder {
+  case node {
+    Element(N(node), attributes, children, events) ->
+      string_builder.concat([
+        string_builder.from_string("<"),
+        string_builder.from_string(node),
+        string_builder.from_string(" id=\""),
+        string_builder.from_string(print_id(current_id)),
+        string_builder.from_string("\" "),
+        string_builder.concat(list.map(attributes, render_attribute)),
+        string_builder.from_string(" "),
+        string_builder.concat(list.map(dict.keys(events), render_event)),
+        string_builder.from_string(">"),
+        string_builder.concat(
+          list.index_map(children, fn(n, i) {
+            let child_id = child(current_id, i)
+            render_node(child_id, n)
+          }),
+        ),
+        string_builder.from_string("</"),
+        string_builder.from_string(node),
+        string_builder.from_string(">"),
+      ])
+    Text(text) -> string_builder.from_string(text)
+  }
+}
+
 // Diff logic
 
 pub type Diff(msg) {
   Update(selector: Id, inner: DomNode(msg))
+  UpdateText(selector: Id, text: String)
   Append(selector: Id, inner: DomNode(msg))
   Prepend(selector: Id, inner: DomNode(msg))
   Delete(selector: Id)
@@ -167,7 +254,7 @@ pub fn diff(
 ) -> List(Diff(msg)) {
   case old, new {
     Text(t1), Text(t2) if t1 == t2 -> []
-    Text(_), Text(_) -> [Update(parent_id, new)]
+    Text(_), Text(t2) -> [UpdateText(parent_id, t2)]
     Element(node1, attributes1, children1, events1),
       Element(node2, attributes2, children2, events2)
       if node1 == node2
@@ -220,6 +307,12 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
           ),
         ),
       ])
+    UpdateText(selector, text) ->
+      json.object([
+        #("action", json.string("updatetext")),
+        #("selector", encode_id(selector)),
+        #("value", json.string(text)),
+      ])
   }
 }
 
@@ -260,14 +353,14 @@ pub fn div(
   attributes: List(Attribute),
   children: List(DomNode(msg)),
 ) -> DomNode(msg) {
-  Element(Node("div"), attributes, children, dict.from_list([]))
+  Element(N("div"), attributes, children, dict.from_list([]))
 }
 
 pub fn button(
   attributes: List(Attribute),
   children: List(DomNode(msg)),
 ) -> DomNode(msg) {
-  Element(Node("button"), attributes, children, dict.from_list([]))
+  Element(N("button"), attributes, children, dict.from_list([]))
 }
 
 pub fn text(text: String) -> DomNode(msg) {

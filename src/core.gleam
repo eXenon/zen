@@ -37,13 +37,13 @@ pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg))
     dynamic.decode3(
       fn(id, name, payload) {
         let dom.EventStore(events) = app.events
-        let stored = dict.get(events, dom.Id(id))
+        let stored = dict.get(events, id)
         use events_for_id <- result.try(stored)
         use handler <- result.try(dict.get(events_for_id, name))
         dom.event_payload_decoder(handler, payload)
         |> result.nil_error
       },
-      dynamic.field("handler", dynamic.list(dynamic.int)),
+      dynamic.field("handler", dom.id_decoder()),
       dynamic.field("name", dynamic.string),
       dynamic.field("payload", dynamic.dynamic),
     )
@@ -87,71 +87,13 @@ pub fn app(init, update, view) -> App(model, msg) {
   App(init, update, view, dom.empty_event_store())
 }
 
-pub fn render_attribute(
-  attribute: dom.Attribute,
-) -> string_builder.StringBuilder {
-  let dom.Attribute(name, value) = attribute
-  string_builder.concat([
-    string_builder.from_string(name),
-    string_builder.from_string("=\""),
-    string_builder.from_string(value),
-    string_builder.from_string("\""),
-  ])
-}
-
-pub fn render_event(event_name: String) -> string_builder.StringBuilder {
-  string_builder.concat([
-    string_builder.from_string("data-event=\""),
-    string_builder.from_string(event_name),
-    string_builder.from_string("\""),
-  ])
-}
-
-pub fn render_id(id: dom.Id) -> string_builder.StringBuilder {
-  let dom.Id(id) = id
-  string_builder.join(
-    list.map(id, fn(i) { string_builder.from_string(int.to_string(i)) }),
-    "-",
-  )
-}
-
-pub fn render_node(
-  current_id: dom.Id,
-  node: dom.DomNode(msg),
-) -> string_builder.StringBuilder {
-  case node {
-    dom.Element(dom.Node(node), attributes, children, events) ->
-      string_builder.concat([
-        string_builder.from_string("<"),
-        string_builder.from_string(node),
-        string_builder.from_string(" id=\""),
-        render_id(current_id),
-        string_builder.from_string("\" "),
-        string_builder.concat(list.map(attributes, render_attribute)),
-        string_builder.from_string(" "),
-        string_builder.concat(list.map(dict.keys(events), render_event)),
-        string_builder.from_string(">"),
-        string_builder.concat(
-          list.index_map(children, fn(n, i) {
-            let child_id = dom.child(current_id, i)
-            render_node(child_id, n)
-          }),
-        ),
-        string_builder.from_string("</"),
-        string_builder.from_string(node),
-        string_builder.from_string(">"),
-      ])
-    dom.Text(text) -> string_builder.from_string(text)
-  }
-}
-
 pub fn render(view: View(msg)) -> string_builder.StringBuilder {
   let View(title, body) = view
   string_builder.concat([
     prefix(),
     string_builder.from_string(title),
     middle(),
-    render_node(dom.root(), body),
+    dom.render_node(dom.root(), body),
     suffix(),
   ])
 }
@@ -190,4 +132,10 @@ pub fn update(
   msg: Msg(msg),
 ) -> #(model, List(Effect(msg))) {
   app.update(model, msg)
+}
+
+pub fn diff(view1: View(msg), view2: View(msg)) -> List(dom.Diff(msg)) {
+  let View(_, body1) = view1
+  let View(_, body2) = view2
+  dom.diff(dom.root(), body1, body2)
 }
