@@ -12,3 +12,10 @@ fn inner(i, a, b) {
 pub fn extzipmap(a: List(a), b: List(b)) -> List(#(Int, Option(a), Option(b))) {
   inner(0, a, b)
 }
+
+pub fn for_each(count: Int, f: fn(Int) -> a) -> List(a) {
+  case count {
+    i if i <= 0 -> []
+    i -> [f(i), ..for_each(i - 1, f)]
+  }
+}

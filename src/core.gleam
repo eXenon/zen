@@ -93,7 +93,7 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
     prefix(),
     string_builder.from_string(title),
     middle(),
-    dom.render_node(dom.root(), body),
+    dom.render_node(dom.assign_ids(dom.root(), body)),
     suffix(),
   ])
 }
@@ -137,5 +137,9 @@ pub fn update(
 pub fn diff(view1: View(msg), view2: View(msg)) -> List(dom.Diff(msg)) {
   let View(_, body1) = view1
   let View(_, body2) = view2
-  dom.diff(dom.root(), body1, body2)
+  dom.diff(
+    dom.root(),
+    dom.assign_ids(dom.root(), body1),
+    dom.assign_ids(dom.root(), body2),
+  )
 }

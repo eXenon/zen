@@ -1,6 +1,7 @@
 import core
 import dom
 import gleam/int.{to_string}
+import utils
 
 pub type Model {
   Model(count: Int, position: #(Int, Int))
@@ -43,6 +44,7 @@ pub fn view(model: Model) -> core.View(core.Msg(Msg)) {
       ),
       dom.button([], [dom.text("Decrement")])
         |> dom.on_click(fn() { core.Custom(Decrement) }),
+      ..utils.for_each(x, fn(i) { dom.button([], [dom.text(int.to_string(i))]) })
     ])
       |> dom.on_mouse_over(fn(pos) { core.Custom(MouseOver(#(pos.x, pos.y))) }),
   )
