@@ -5,9 +5,10 @@ import gleam/int
 import gleam/io
 import gleam/json
 import gleam/list
-import gleam/option
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string_builder
+import utils
 
 pub type Msg(msg) {
   Custom(msg)
@@ -142,4 +143,13 @@ pub fn diff(view1: View(msg), view2: View(msg)) -> List(dom.Diff(msg)) {
     dom.assign_ids(dom.root(), body1),
     dom.assign_ids(dom.root(), body2),
   )
+}
+
+pub fn title_diff(view1: View(msg), view2: View(msg)) -> Option(String) {
+  let View(old, _) = view1
+  let View(new, _) = view2
+  case old, new {
+    _, _ if old == new -> None
+    _, _ -> Some(new)
+  }
 }

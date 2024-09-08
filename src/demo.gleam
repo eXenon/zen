@@ -35,7 +35,7 @@ pub fn update(
 pub fn view(model: Model) -> core.View(core.Msg(Msg)) {
   let #(x, y) = model.position
   core.View(
-    title: "Demo",
+    title: "Demo + " <> int.to_string(x) <> " - " <> int.to_string(y),
     body: dom.div([], [
       dom.button([], [dom.text("Increment")])
         |> dom.on_click(fn() { core.Custom(Increment) }),

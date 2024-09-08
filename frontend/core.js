@@ -41,6 +41,9 @@ function openWebSocket() {
 }
 
 function apply(message) {
+  if (message.title !== undefined) {
+    document.title = message.title
+  }
   if (message.body) {
     document.body.innerHTML = message.body;
   } else if (message.diff) {

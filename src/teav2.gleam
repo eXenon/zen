@@ -16,6 +16,7 @@ import gleam/result
 import gleam/string
 import gleam/string_builder
 import mist.{type Connection, type ResponseData}
+import utils
 
 pub type ServerSubjects(msg) {
   ServerSubjects(
@@ -85,12 +86,16 @@ fn handle_msg(
   let #(new_state, effects) = core.update(app, state, msg)
   let #(new_app, view) = core.build_view(app, new_state)
   let diffs = core.diff(prev_view, view)
+  let title_diffs =
+    core.title_diff(prev_view, view)
+    |> option.map(fn(t) { #("title", json.string(t)) })
+    |> utils.option_to_list()
   let message = case diffs {
     [] -> []
     _ ->
       diffs
       |> json.array(of: dom.encode)
-      |> fn(diffs) { [#("diff", diffs)] }
+      |> fn(diffs) { [#("diff", diffs), ..title_diffs] }
       |> json.object()
       |> json.to_string()
       |> fn(m) { [m] }

@@ -19,3 +19,10 @@ pub fn for_each(count: Int, f: fn(Int) -> a) -> List(a) {
     i -> [f(i), ..for_each(i - 1, f)]
   }
 }
+
+pub fn option_to_list(o: Option(a)) -> List(a) {
+  case o {
+    Some(v) -> [v]
+    None -> []
+  }
+}
