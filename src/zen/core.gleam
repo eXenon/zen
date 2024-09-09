@@ -1,4 +1,3 @@
-import dom
 import gleam/dict
 import gleam/dynamic
 import gleam/int
@@ -9,6 +8,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string_builder
 import utils
+import zen/dom
 
 pub type Msg(msg) {
   Custom(msg)
@@ -62,7 +62,7 @@ pub fn prefix() -> string_builder.StringBuilder {
     <head>
       <meta charset=\"UTF-8\">
       <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-      <script src=\"/file/frontend/core.js\"></script>
+      <script src=\"/file/core.js\"></script>
       <title>
   ",
   )

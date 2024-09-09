@@ -1,7 +1,5 @@
-import core
-import demo
-import dom
 import gleam/bytes_builder
+import gleam/erlang
 import gleam/erlang/process
 import gleam/function
 import gleam/http/request.{type Request}
@@ -14,9 +12,10 @@ import gleam/otp/actor
 import gleam/otp/task
 import gleam/result
 import gleam/string
-import gleam/string_builder
 import mist.{type Connection, type ResponseData}
 import utils
+import zen/core
+import zen/dom
 
 pub type ServerSubjects(msg) {
   ServerSubjects(
@@ -25,12 +24,11 @@ pub type ServerSubjects(msg) {
   )
 }
 
-pub fn main() {
+pub fn run(app: core.App(model, msg)) {
   // These values are for the Websocket process initialized below
   let broadcast_subject = process.new_subject()
 
   // Demo app
-  let app = demo.demo()
   let state = app.init()
   let #(app, view) = core.build_view(app, state)
 
@@ -157,7 +155,8 @@ fn serve_file(
   _req: Request(Connection),
   path: List(String),
 ) -> Response(ResponseData) {
-  let file_path = string.join(path, "/")
+  let assert Ok(priv) = erlang.priv_directory("zen")
+  let file_path = string.join([priv, ..path], "/")
 
   // Omitting validation for brevity
   mist.send_file(file_path, offset: 0, limit: None)
