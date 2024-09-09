@@ -1,20 +1,20 @@
-# teav2
+# zen
 
-[![Package Version](https://img.shields.io/hexpm/v/teav2)](https://hex.pm/packages/teav2)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/teav2/)
+[![Package Version](https://img.shields.io/hexpm/v/zen)](https://hex.pm/packages/teav2)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/zen/)
 
 ```sh
-gleam add teav2@1
+gleam add zen@1
 ```
 ```gleam
-import teav2
+import zen
 
 pub fn main() {
   // TODO: An example of the project in use
 }
 ```
 
-Further documentation can be found at <https://hexdocs.pm/teav2>.
+Further documentation can be found at <https://hexdocs.pm/zen>.
 
 ## Development
 
