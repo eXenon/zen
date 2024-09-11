@@ -51,6 +51,7 @@ function apply(message) {
     document.body.innerHTML = message.body;
   } else if (message.diff) {
     applyDiff(message.diff);
+    removeMarkedNodes();
   } else {
     console.error('Invalid message format: neither body nor diff found');
   }
@@ -75,7 +76,7 @@ function applyDiff(diff) {
           element.insertAdjacentHTML('afterbegin', change.value);
           break;
         case 'delete':
-          element.remove();
+          element.setAttribute("data-mark-delete", "1");
           break;
         case 'updateproperties':
           for (const attr in element.getAttributeNames()) {
@@ -109,6 +110,13 @@ function applyDiff(diff) {
     } else {
       console.error('Element not found for selector:', change.selector);
     }
+  }
+}
+
+function removeMarkedNodes() {
+  const markedNodes = document.querySelectorAll('[data-mark-delete]');
+  for (const node of markedNodes) {
+    node.remove();
   }
 }
 
@@ -152,7 +160,6 @@ function findNodeByIntList(intList) {
   
   for (const index of reversedList) {
     if (node.childNodes.length > index) {
-      console.log("node", node, "index", index, "child", node.childNodes[index])
       node = node.childNodes[index];
     } else {
       console.error('Invalid path: child index out of bounds', index);
