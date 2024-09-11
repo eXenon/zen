@@ -40,7 +40,10 @@ pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg))
         let dom.EventStore(events) = app.events
         let stored = dict.get(events, id)
         use events_for_id <- result.try(stored)
-        use handler <- result.try(dict.get(events_for_id, name))
+        use handler <- result.try(dom.find_handler_for_event(
+          events_for_id,
+          name,
+        ))
         dom.event_payload_decoder(handler, payload)
         |> result.nil_error
       },
@@ -102,7 +105,7 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
 pub fn all_events(
   id: dom.Id,
   node: dom.DomNode(msg),
-) -> List(#(dom.Id, dict.Dict(String, dom.EventHandler(msg)))) {
+) -> List(#(dom.Id, dom.DomEventHandlers(msg))) {
   case node {
     dom.Element(_, _, children, events) -> [
       #(id, events),

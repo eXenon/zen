@@ -1,3 +1,6 @@
+const LISTENERS = {}
+const LOCK = false
+
 function openWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
@@ -53,6 +56,10 @@ function apply(message) {
   }
 }
 
+function isProtectedAttribute(attr) {
+  return attr == "id" || attr.slice(0, 10) == "data-event"
+}
+
 function applyDiff(diff) {
   for (const change of diff) {
     const element = findNodeByIntList(change.selector);
@@ -71,16 +78,30 @@ function applyDiff(diff) {
           element.remove();
           break;
         case 'updateproperties':
+          for (const attr in element.getAttributeNames()) {
+            // id is a protected category
+            if (!isProtectedAttribute(attr)) {
+              element.removeAttribute(attr)
+            }
+          }
           for (const [key, value] of Object.entries(change.properties)) {
-            if (key in element) {
-              element[key] = value;
-            } else {
-              element.setAttribute(key, value);
+            if (!isProtectedAttribute(attr)) {
+              element.setAttribute(key, value)
             }
           }
           break;
         case 'updatetext':
           element.textContent = change.value;
+          break;
+        case 'updateevents':
+          for (const eventName of change.remove) {
+            if (LISTENERS[element.id] && LISTENERS[element.id][eventName]) {
+              console.log('removing event listener for', eventName, 'on', element)
+              element.removeEventListener(eventName, LISTENERS[element.id][eventName])
+            }
+            element.removeAttribute('data-listener-' + eventName + '-set')
+          }
+          element.setAttribute('data-event', change.value.join(","))
           break;
         default:
           console.error('Unknown diff action:', change.action);
@@ -152,25 +173,30 @@ function pathToHandler(path) {
 function setEventListeners(ws) {
   const targets = document.querySelectorAll('[data-event]');
   for (const target of targets) {
-    const eventName = target.getAttribute('data-event');
-    const path = idToPath(target.getAttribute('id'));
+    const eventNames = target.getAttribute('data-event').split(",");
+    const id = target.getAttribute('id');
+    const path = idToPath(id);
     const handler = pathToHandler(path);
     
     // Check if the event listener is already set
-    if (!target.hasAttribute('data-listener-' + eventName + '-set')) {
-      const eventHandler = (event) => {
-        console.log('Sending event to server:', eventName, event);
-        ws.send(JSON.stringify({
-          handler: handler,
-          name: eventName,
-          payload: payloadForEvent(eventName, event)
-        }));
-      };
-      console.log('Setting event listener for', eventName, 'on', target);
-      target.addEventListener(eventName, eventHandler);
-      
-      // Mark this element as having a listener set
-      target.setAttribute('data-listener-' + eventName + '-set', 'true');
+    for (const eventName of eventNames) {
+      if (eventName !== "" && !target.hasAttribute('data-listener-' + eventName + '-set')) {
+        const eventHandler = (event) => {
+          ws.send(JSON.stringify({
+            handler: handler,
+            name: eventName,
+            payload: payloadForEvent(eventName, event)
+          }));
+        };
+        if (!LISTENERS[id]) {
+          LISTENERS[id] = {}
+        }
+        LISTENERS[id][eventName] = eventHandler
+        target.addEventListener(eventName, eventHandler);
+        
+        // Mark this element as having a listener set
+        target.setAttribute('data-listener-' + eventName + '-set', 'true');
+      }
     }
   }
 }

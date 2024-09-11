@@ -80,12 +80,15 @@ pub type Attribute {
   Attribute(name: String, value: String)
 }
 
+pub type DomEventHandlers(msg) =
+  List(EventHandler(msg))
+
 pub type DomNode(msg) {
   Element(
     node: Node,
     attributes: List(Attribute),
     children: List(DomNode(msg)),
-    events: dict.Dict(String, EventHandler(msg)),
+    events: DomEventHandlers(msg),
   )
   Text(String)
 }
@@ -104,11 +107,22 @@ pub type EventHandlerError {
 }
 
 pub type EventStore(msg) {
-  EventStore(dict.Dict(Id, dict.Dict(String, EventHandler(msg))))
+  EventStore(dict.Dict(Id, DomEventHandlers(msg)))
 }
 
 pub fn empty_event_store() -> EventStore(msg) {
   EventStore(dict.from_list([]))
+}
+
+pub fn event_handler_name(event_handler: EventHandler(msg)) -> String {
+  case event_handler {
+    Click(_) -> "click"
+    MouseOver(_) -> "mouseover"
+  }
+}
+
+pub fn event_names(handlers: DomEventHandlers(msg)) -> List(String) {
+  list.map(handlers, event_handler_name)
 }
 
 // DOM elements with attached IDs
@@ -119,7 +133,7 @@ pub type DomNodeWithId(msg) {
     node: Node,
     attributes: List(Attribute),
     children: List(DomNodeWithId(msg)),
-    events: dict.Dict(String, EventHandler(msg)),
+    events: DomEventHandlers(msg),
   )
   TextWI(Id, String)
 }
@@ -148,6 +162,15 @@ pub fn id_of(node: DomNodeWithId(msg)) -> Id {
 }
 
 // Event related functions
+
+pub fn find_handler_for_event(
+  handlers: DomEventHandlers(msg),
+  name: String,
+) -> Result(EventHandler(msg), Nil) {
+  handlers
+  |> list.filter(fn(h) { event_handler_name(h) == name })
+  |> list.first
+}
 
 pub fn event_payload_decoder(
   handler: EventHandler(msg),
@@ -192,10 +215,17 @@ pub fn render_attribute(attribute: Attribute) -> string_builder.StringBuilder {
   ])
 }
 
-pub fn render_event(event_name: String) -> string_builder.StringBuilder {
+pub fn render_events(
+  event_handlers: DomEventHandlers(msg),
+) -> string_builder.StringBuilder {
   string_builder.concat([
     string_builder.from_string("data-event=\""),
-    string_builder.from_string(event_name),
+    string_builder.join(
+      list.map(event_handlers, fn(h) {
+        h |> event_handler_name |> string_builder.from_string
+      }),
+      ",",
+    ),
     string_builder.from_string("\""),
   ])
 }
@@ -211,7 +241,7 @@ pub fn render_node(node: DomNodeWithId(msg)) -> string_builder.StringBuilder {
         string_builder.from_string("\" "),
         string_builder.concat(list.map(attributes, render_attribute)),
         string_builder.from_string(" "),
-        string_builder.concat(list.map(dict.keys(events), render_event)),
+        render_events(events),
         string_builder.from_string(">"),
         string_builder.concat(list.map(children, render_node)),
         string_builder.from_string("</"),
@@ -231,6 +261,7 @@ pub type Diff(msg) {
   Prepend(selector: Id, inner: DomNodeWithId(msg))
   Delete(selector: Id)
   UpdateProperties(selector: Id, properties: List(Attribute))
+  UpdateEvents(selector: Id, event_names: List(String), remove: List(String))
 }
 
 pub fn diff_attributes(
@@ -245,12 +276,18 @@ pub fn diff_attributes(
 }
 
 pub fn diff_events(
-  _selector: Id,
-  _old: dict.Dict(String, EventHandler(msg)),
-  _new: dict.Dict(String, EventHandler(msg)),
+  selector: Id,
+  old: DomEventHandlers(msg),
+  new: DomEventHandlers(msg),
 ) -> List(Diff(msg)) {
-  // TODO
-  []
+  case event_names(old), event_names(new) {
+    old_events, new_events if old_events == new_events -> []
+    old_events, new_events -> {
+      let remove =
+        list.filter(old_events, fn(e) { !list.contains(new_events, e) })
+      [UpdateEvents(selector, new_events, remove)]
+    }
+  }
 }
 
 pub fn diff_children(
@@ -342,6 +379,13 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
         #("selector", encode_id(selector)),
         #("value", json.string(text)),
       ])
+    UpdateEvents(selector, event_names, remove) ->
+      json.object([
+        #("action", json.string("updateevents")),
+        #("selector", encode_id(selector)),
+        #("value", json.array(event_names, json.string)),
+        #("remove", json.array(remove, json.string)),
+      ])
   }
 }
 
@@ -350,12 +394,7 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
 pub fn on_click(node: DomNode(msg), handler: fn() -> msg) -> DomNode(msg) {
   case node {
     Element(n, a, c, e) ->
-      Element(
-        node: n,
-        attributes: a,
-        children: c,
-        events: dict.insert(e, "click", Click(handler)),
-      )
+      Element(node: n, attributes: a, children: c, events: [Click(handler), ..e])
     Text(_) -> node
   }
 }
@@ -366,12 +405,10 @@ pub fn on_mouse_over(
 ) -> DomNode(msg) {
   case node {
     Element(n, a, c, e) ->
-      Element(
-        node: n,
-        attributes: a,
-        children: c,
-        events: dict.insert(e, "mouseover", MouseOver(handler)),
-      )
+      Element(node: n, attributes: a, children: c, events: [
+        MouseOver(handler),
+        ..e
+      ])
     Text(_) -> node
   }
 }
@@ -382,14 +419,14 @@ pub fn div(
   attributes: List(Attribute),
   children: List(DomNode(msg)),
 ) -> DomNode(msg) {
-  Element(N("div"), attributes, children, dict.from_list([]))
+  Element(N("div"), attributes, children, [])
 }
 
 pub fn button(
   attributes: List(Attribute),
   children: List(DomNode(msg)),
 ) -> DomNode(msg) {
-  Element(N("button"), attributes, children, dict.from_list([]))
+  Element(N("button"), attributes, children, [])
 }
 
 pub fn text(text: String) -> DomNode(msg) {
