@@ -1,128 +1,29 @@
-import gleam/dict
-import gleam/dynamic
-import gleam/erlang/node
-import gleam/function
-import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/otp/intensity_tracker
-import gleam/result
-import gleam/string
 import gleam/string_builder
-import gluid
 import utils
+import zen/dom/attributes.{type Attribute, to_string as attribute_to_string}
+import zen/dom/events.{
+  type EventHandler, type EventHandlers, type EventPayloadCoordinates, Click,
+  MouseOver, event_handler_name, event_handler_names,
+}
+import zen/dom/id.{type Id, child, encode_id, print_id}
 
 // Types
-
-pub type Id {
-  Root
-  Node(List(Int))
-}
-
-pub fn root() -> Id {
-  Root
-}
-
-pub fn child(parent: Id, index: Int) -> Id {
-  case parent {
-    Root -> Node([index])
-    Node(p) -> Node([index, ..p])
-  }
-}
-
-pub fn parent(child: Id) -> Id {
-  case child {
-    Root -> Root
-    Node([_, ..parent_path]) -> Node(parent_path)
-    Node([]) -> Root
-  }
-}
-
-pub fn encode_id(id: Id) -> json.Json {
-  case id {
-    Root -> json.string("root")
-    Node(path) -> json.array(path, json.int)
-  }
-}
-
-pub fn print_id(id: Id) -> String {
-  case id {
-    Root -> "root"
-    Node(path) -> string.join(list.map(path, int.to_string), "-")
-  }
-}
-
-pub fn id_decoder() {
-  dynamic.any([
-    fn(d) {
-      dynamic.string(d)
-      |> result.try(fn(s) {
-        case s {
-          "root" -> Ok(Root)
-          _ ->
-            Error([dynamic.DecodeError(expected: "root", found: s, path: [])])
-        }
-      })
-    },
-    fn(d) {
-      dynamic.list(of: dynamic.int)(d)
-      |> result.map(Node)
-    },
-  ])
-}
 
 pub type Node {
   N(String)
 }
-
-pub type Attribute {
-  Attribute(name: String, value: String)
-}
-
-pub type DomEventHandlers(msg) =
-  List(EventHandler(msg))
 
 pub type DomNode(msg) {
   Element(
     node: Node,
     attributes: List(Attribute),
     children: List(DomNode(msg)),
-    events: DomEventHandlers(msg),
+    events: EventHandlers(msg),
   )
   Text(String)
-}
-
-pub type EventPayloadCoordinates {
-  Coordinates(x: Int, y: Int)
-}
-
-pub type EventHandler(msg) {
-  Click(fn() -> msg)
-  MouseOver(fn(EventPayloadCoordinates) -> msg)
-}
-
-pub type EventHandlerError {
-  DecodeError
-}
-
-pub type EventStore(msg) {
-  EventStore(dict.Dict(Id, DomEventHandlers(msg)))
-}
-
-pub fn empty_event_store() -> EventStore(msg) {
-  EventStore(dict.from_list([]))
-}
-
-pub fn event_handler_name(event_handler: EventHandler(msg)) -> String {
-  case event_handler {
-    Click(_) -> "click"
-    MouseOver(_) -> "mouseover"
-  }
-}
-
-pub fn event_names(handlers: DomEventHandlers(msg)) -> List(String) {
-  list.map(handlers, event_handler_name)
 }
 
 // DOM elements with attached IDs
@@ -133,7 +34,7 @@ pub type DomNodeWithId(msg) {
     node: Node,
     attributes: List(Attribute),
     children: List(DomNodeWithId(msg)),
-    events: DomEventHandlers(msg),
+    events: EventHandlers(msg),
   )
   TextWI(Id, String)
 }
@@ -164,7 +65,7 @@ pub fn id_of(node: DomNodeWithId(msg)) -> Id {
 // Event related functions
 
 pub fn find_handler_for_event(
-  handlers: DomEventHandlers(msg),
+  handlers: EventHandlers(msg),
   name: String,
 ) -> Result(EventHandler(msg), Nil) {
   handlers
@@ -172,41 +73,10 @@ pub fn find_handler_for_event(
   |> list.first
 }
 
-pub fn event_payload_decoder(
-  handler: EventHandler(msg),
-  payload: dynamic.Dynamic,
-) -> Result(msg, EventHandlerError) {
-  case handler {
-    Click(handler) -> Ok(handler())
-    MouseOver(handler) ->
-      case
-        dynamic.decode2(
-          Coordinates,
-          dynamic.field("x", dynamic.int),
-          dynamic.field("y", dynamic.int),
-        )(payload)
-      {
-        Ok(coordinates) -> Ok(handler(coordinates))
-        Error(_) -> Error(DecodeError)
-      }
-  }
-}
-
-pub type Event(msg) {
-  Event(id: String, handler: EventHandler(msg))
-}
-
-pub fn event_name(name: Event(msg)) -> String {
-  case name.handler {
-    Click(_) -> "click"
-    MouseOver(_) -> "mouseover"
-  }
-}
-
 // Rendering logic
 
 pub fn render_attribute(attribute: Attribute) -> string_builder.StringBuilder {
-  let Attribute(name, value) = attribute
+  let #(name, value) = attribute_to_string(attribute)
   string_builder.concat([
     string_builder.from_string(name),
     string_builder.from_string("=\""),
@@ -216,7 +86,7 @@ pub fn render_attribute(attribute: Attribute) -> string_builder.StringBuilder {
 }
 
 pub fn render_events(
-  event_handlers: DomEventHandlers(msg),
+  event_handlers: EventHandlers(msg),
 ) -> string_builder.StringBuilder {
   string_builder.concat([
     string_builder.from_string("data-event=\""),
@@ -277,10 +147,10 @@ pub fn diff_attributes(
 
 pub fn diff_events(
   selector: Id,
-  old: DomEventHandlers(msg),
-  new: DomEventHandlers(msg),
+  old: EventHandlers(msg),
+  new: EventHandlers(msg),
 ) -> List(Diff(msg)) {
-  case event_names(old), event_names(new) {
+  case event_handler_names(old), event_handler_names(new) {
     old_events, new_events if old_events == new_events -> []
     old_events, new_events -> {
       let remove =
@@ -367,7 +237,7 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
           "properties",
           json.object(
             list.map(properties, fn(a) {
-              let Attribute(name, value) = a
+              let #(name, value) = attribute_to_string(a)
               #(name, json.string(value))
             }),
           ),
@@ -431,4 +301,15 @@ pub fn button(
 
 pub fn text(text: String) -> DomNode(msg) {
   Text(text)
+}
+
+pub fn input(attributes: List(Attribute)) -> DomNode(msg) {
+  Element(N("input"), attributes, [], [])
+}
+
+pub fn span(
+  attributes: List(Attribute),
+  children: List(DomNode(msg)),
+) -> DomNode(msg) {
+  Element(N("span"), attributes, children, [])
 }

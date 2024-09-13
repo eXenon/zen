@@ -1,14 +1,13 @@
 import gleam/dict
 import gleam/dynamic
-import gleam/int
-import gleam/io
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string_builder
-import utils
 import zen/dom
+import zen/dom/events
+import zen/dom/id
 
 pub type Msg(msg) {
   Custom(msg)
@@ -29,7 +28,7 @@ pub type App(model, msg) {
     init: fn() -> model,
     update: fn(model, Msg(msg)) -> #(model, List(Effect(msg, model))),
     view: fn(model) -> View(Msg(msg)),
-    events: dom.EventStore(Msg(msg)),
+    events: events.EventStore(Msg(msg)),
   )
 }
 
@@ -37,17 +36,17 @@ pub fn deserialize(app: App(model, msg), raw: String) -> option.Option(Msg(msg))
   let decoder =
     dynamic.decode3(
       fn(id, name, payload) {
-        let dom.EventStore(events) = app.events
+        let events.EventStore(events) = app.events
         let stored = dict.get(events, id)
         use events_for_id <- result.try(stored)
         use handler <- result.try(dom.find_handler_for_event(
           events_for_id,
           name,
         ))
-        dom.event_payload_decoder(handler, payload)
+        events.event_payload_decoder(handler, payload)
         |> result.nil_error
       },
-      dynamic.field("handler", dom.id_decoder()),
+      dynamic.field("handler", id.id_decoder()),
       dynamic.field("name", dynamic.string),
       dynamic.field("payload", dynamic.dynamic),
     )
@@ -89,7 +88,7 @@ pub fn suffix() -> string_builder.StringBuilder {
 }
 
 pub fn app(init, update, view) -> App(model, msg) {
-  App(init, update, view, dom.empty_event_store())
+  App(init, update, view, events.empty_event_store())
 }
 
 pub fn render(view: View(msg)) -> string_builder.StringBuilder {
@@ -98,21 +97,21 @@ pub fn render(view: View(msg)) -> string_builder.StringBuilder {
     prefix(),
     string_builder.from_string(title),
     middle(),
-    dom.render_node(dom.assign_ids(dom.root(), body)),
+    dom.render_node(dom.assign_ids(id.root(), body)),
     suffix(),
   ])
 }
 
 pub fn all_events(
-  id: dom.Id,
+  id: id.Id,
   node: dom.DomNode(msg),
-) -> List(#(dom.Id, dom.DomEventHandlers(msg))) {
+) -> List(#(id.Id, events.EventHandlers(msg))) {
   case node {
     dom.Element(_, _, children, events) -> [
       #(id, events),
       ..list.concat(
         list.index_map(children, fn(n, i) {
-          let child_id = dom.child(id, i)
+          let child_id = id.child(id, i)
           all_events(child_id, n)
         }),
       )
@@ -126,8 +125,8 @@ pub fn build_view(
   model: model,
 ) -> #(App(model, msg), View(Msg(msg))) {
   let view = app.view(model)
-  let events = all_events(dom.root(), view.body)
-  let registry = dom.EventStore(dict.from_list(events))
+  let events = all_events(id.root(), view.body)
+  let registry = events.EventStore(dict.from_list(events))
   #(App(..app, events: registry), view)
 }
 
@@ -148,9 +147,9 @@ pub fn diff(view1: View(msg), view2: View(msg)) -> List(dom.Diff(msg)) {
   let View(_, body1) = view1
   let View(_, body2) = view2
   dom.diff(
-    dom.root(),
-    dom.assign_ids(dom.root(), body1),
-    dom.assign_ids(dom.root(), body2),
+    id.root(),
+    dom.assign_ids(id.root(), body1),
+    dom.assign_ids(id.root(), body2),
   )
 }
 
