@@ -1,5 +1,6 @@
 const LISTENERS = {}
 const LOCK = false
+const ttdebugger = timeTravelDebugger()
 
 function openWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -25,8 +26,10 @@ function openWebSocket() {
         return;
       }
       const message = JSON.parse(event.data);
+      ttdebugger.addMessage(message)
       apply(message);
       setEventListeners(ws);
+      ttdebugger.addState(document.getElementById('root').innerHTML);
     } catch (error) {
       console.error('Error parsing WebSocket message:', error);
     }
@@ -209,6 +212,9 @@ function setEventListeners(ws) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  ttdebugger.init(document.body.getAttribute('debug') === 'true');
+  ttdebugger.addState(document.getElementById('root').innerHTML);
+  ttdebugger.addMessage('init');
   const ws = openWebSocket();
   setEventListeners(ws);
 });

@@ -106,9 +106,10 @@ fn handle_msg(
   // Run effects
   list.map(effects, fn(effect) {
     task.async(fn() {
-      let core.Effect(f) = effect
-      let msg = f()
-      process.send(subjects.self, EffectFeedback(msg))
+      case core.run_effect(state, effect) {
+        Some(msg) -> process.send(subjects.self, EffectFeedback(msg))
+        None -> Nil
+      }
     })
   })
 
@@ -162,7 +163,11 @@ fn serve_file(
   mist.send_file(file_path, offset: 0, limit: None)
   |> result.map(fn(file) {
     response.new(200)
-    |> response.prepend_header("content-type", "text/javascript")
+    |> response.prepend_header("content-type", "application/javascript")
+    |> response.prepend_header("cache-control", "no-cache")
+    |> response.prepend_header("pragma", "no-cache")
+    |> response.prepend_header("expires", "0")
+    |> response.prepend_header("x-content-type-options", "nosniff")
     |> response.set_body(file)
   })
   |> result.lazy_unwrap(fn() {

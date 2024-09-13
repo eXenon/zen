@@ -20,14 +20,14 @@ pub type View(msg) {
   View(title: String, body: dom.DomNode(msg))
 }
 
-pub type Effect(msg) {
-  Effect(fn() -> Msg(msg))
+pub type Effect(msg, model) {
+  Effect(fn(model) -> Option(Msg(msg)))
 }
 
 pub type App(model, msg) {
   App(
     init: fn() -> model,
-    update: fn(model, Msg(msg)) -> #(model, List(Effect(msg))),
+    update: fn(model, Msg(msg)) -> #(model, List(Effect(msg, model))),
     view: fn(model) -> View(Msg(msg)),
     events: dom.EventStore(Msg(msg)),
   )
@@ -65,6 +65,7 @@ pub fn prefix() -> string_builder.StringBuilder {
     <head>
       <meta charset=\"UTF-8\">
       <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+      <script src=\"/file/debugger.js\"></script>
       <script src=\"/file/core.js\"></script>
       <title>
   ",
@@ -134,8 +135,13 @@ pub fn update(
   app: App(model, msg),
   model: model,
   msg: Msg(msg),
-) -> #(model, List(Effect(msg))) {
+) -> #(model, List(Effect(msg, model))) {
   app.update(model, msg)
+}
+
+pub fn run_effect(model: model, effect: Effect(msg, model)) -> Option(Msg(msg)) {
+  let Effect(f) = effect
+  f(model)
 }
 
 pub fn diff(view1: View(msg), view2: View(msg)) -> List(dom.Diff(msg)) {
