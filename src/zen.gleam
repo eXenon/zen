@@ -1,6 +1,6 @@
 import gleam/bytes_builder
 import gleam/erlang
-import gleam/erlang/process
+import gleam/erlang/process.{type Subject}
 import gleam/function
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
@@ -9,28 +9,41 @@ import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
-import gleam/otp/task
 import gleam/result
 import gleam/string
+import gleam/string_builder
 import mist.{type Connection, type ResponseData}
-import utils
 import zen/core
 import zen/dom
+import zen/dom/builder
+import zen/dom/id
+import zen/effects
+import zen/helpers/pubsub
+import zen/helpers/timedkv
+import zen/utils
 
-pub type ServerSubjects(msg) {
-  ServerSubjects(
-    self: process.Subject(ServerSideMessage(msg)),
-    broadcast: process.Subject(ServerSideMessage(msg)),
+pub type ServerSideState(model, msg) {
+  ServerSideState(
+    id: String,
+    self: Subject(core.Msg(msg)),
+    app: core.App(model, msg),
+    state: model,
+    view: core.View(core.Msg(msg)),
+    timedkv: Subject(
+      timedkv.TimedKVMessage(
+        #(core.App(model, msg), model, core.View(core.Msg(msg))),
+      ),
+    ),
+    pubsub: Subject(pubsub.PubSubMessage(core.Msg(msg))),
   )
 }
 
 pub fn run(app: core.App(model, msg)) {
-  // These values are for the Websocket process initialized below
-  let broadcast_subject = process.new_subject()
+  // PubSub handles messages between clients
+  let assert Ok(pubsub) = pubsub.create()
 
-  // Demo app
-  let state = app.init()
-  let #(app, view) = core.build_view(app, state)
+  // TimedKV handles the ability to link a websocket connection to a client
+  let assert Ok(timedkv) = timedkv.create(30)
 
   let not_found =
     response.new(404)
@@ -39,19 +52,38 @@ pub fn run(app: core.App(model, msg)) {
   let assert Ok(_) =
     fn(req: Request(Connection)) -> Response(ResponseData) {
       case request.path_segments(req) {
-        [] -> send_view(req, view)
+        [] -> {
+          let id = utils.uuid()
+          let state = app.init()
+          let #(app, view) = core.build_view(app, state)
+          timedkv.store(timedkv, id, #(app, state, view))
+          send_view(req, id, view)
+        }
         ["ws"] -> {
-          let self_subject = process.new_subject()
-          let selector =
-            process.new_selector()
-            |> process.selecting(broadcast_subject, function.identity)
-            |> process.selecting(self_subject, function.identity)
-          let subjects =
-            ServerSubjects(self: self_subject, broadcast: broadcast_subject)
           mist.websocket(
             request: req,
             on_init: fn(_conn) {
-              #(#(app, state, view, subjects), Some(selector))
+              // Initialize a new app state, but the client can request the already initialized state
+              // by sending "init+" followed by the id
+              let state = app.init()
+              let #(app, view) = core.build_view(app, state)
+              let id = utils.uuid()
+              let self_subject = process.new_subject()
+              let selector =
+                process.new_selector()
+                |> process.selecting(self_subject, function.identity)
+              let state =
+                ServerSideState(
+                  id: id,
+                  self: self_subject,
+                  app: app,
+                  state: state,
+                  view: view,
+                  timedkv: timedkv,
+                  pubsub: pubsub,
+                )
+              let _ = pubsub.subscribe(pubsub, self_subject, [pubsub.topic(id)])
+              #(state, Some(selector))
             },
             on_close: fn(_state) { io.println("goodbye!") },
             handler: handle_ws_message,
@@ -69,23 +101,16 @@ pub fn run(app: core.App(model, msg)) {
   process.sleep_forever()
 }
 
-pub type ServerSideMessage(msg) {
-  EffectFeedback(core.Msg(msg))
-}
-
 fn handle_msg(
   conn: mist.WebsocketConnection,
-  subjects: ServerSubjects(msg),
-  app: core.App(model, msg),
-  state: model,
-  prev_view: core.View(core.Msg(msg)),
+  zen: ServerSideState(model, msg),
   msg: core.Msg(msg),
 ) {
-  let #(new_state, effects) = core.update(app, state, msg)
-  let #(new_app, view) = core.build_view(app, new_state)
-  let diffs = core.diff(prev_view, view)
+  let #(new_state, effects) = core.update(zen.app, zen.state, msg)
+  let #(new_app, new_view) = core.build_view(zen.app, new_state)
+  let diffs = core.diff(zen.view, new_view)
   let title_diffs =
-    core.title_diff(prev_view, view)
+    core.title_diff(zen.view, new_view)
     |> option.map(fn(t) { #("title", json.string(t)) })
     |> utils.option_to_list()
   let message = case diffs {
@@ -99,53 +124,71 @@ fn handle_msg(
       |> fn(m) { [m] }
   }
 
+  // Send diffs to client
   let assert Ok(_) =
     list.map(message, with: mist.send_text_frame(conn, _))
     |> result.all
 
   // Run effects
-  list.map(effects, fn(effect) {
-    task.async(fn() {
-      case core.run_effect(state, effect) {
-        Some(msg) -> process.send(subjects.self, EffectFeedback(msg))
-        None -> Nil
-      }
-    })
-  })
+  list.map(effects, fn(effect) { effects.run(zen.self, zen.pubsub, effect) })
 
-  #(new_app, new_state, view)
+  ServerSideState(
+    zen.id,
+    zen.self,
+    new_app,
+    new_state,
+    new_view,
+    zen.timedkv,
+    zen.pubsub,
+  )
 }
 
-fn handle_ws_message(tea, conn, message) {
-  let #(app, state, prev_view, subjects) = tea
+fn handle_ws_message(
+  zen: ServerSideState(model, msg),
+  conn: mist.WebsocketConnection,
+  message: mist.WebsocketMessage(core.Msg(msg)),
+) {
   case message {
     mist.Text("ping") -> {
       let assert Ok(_) = mist.send_text_frame(conn, "pong")
-      actor.continue(tea)
+      actor.continue(zen)
+    }
+
+    mist.Text("init+" <> id) -> {
+      let assert Ok(#(app, state, view)) = timedkv.get(zen.timedkv, id)
+      let new_zen =
+        ServerSideState(id, zen.self, app, state, view, zen.timedkv, zen.pubsub)
+      // Ensure that the client state is synced with the server state
+      // even though theoretically, the client should already have the
+      // initial view from the static response
+      let assert Ok(_) =
+        [#("body", dom.node_encoder(dom.assign_ids(id.root(), view.body)))]
+        |> json.object
+        |> json.to_string
+        |> fn(s) { mist.send_text_frame(conn, s) }
+      actor.continue(new_zen)
     }
 
     mist.Text(incoming) -> {
-      case core.deserialize(app, incoming) {
+      case core.deserialize(zen.app, incoming) {
         Some(msg) -> {
-          let #(new_app, new_state, new_view) =
-            handle_msg(conn, subjects, app, state, prev_view, msg)
-          actor.continue(#(new_app, new_state, new_view, subjects))
+          let new_zen = handle_msg(conn, zen, msg)
+          actor.continue(new_zen)
         }
         None -> {
           io.println("error: could not deserialize message " <> incoming)
-          actor.continue(tea)
+          actor.continue(zen)
         }
       }
     }
 
     mist.Binary(_) -> {
-      actor.continue(tea)
+      actor.continue(zen)
     }
 
-    mist.Custom(EffectFeedback(msg)) -> {
-      let #(new_app, new_state, new_view) =
-        handle_msg(conn, subjects, app, state, prev_view, msg)
-      actor.continue(#(new_app, new_state, new_view, subjects))
+    mist.Custom(msg) -> {
+      let new_zen = handle_msg(conn, zen, msg)
+      actor.continue(new_zen)
     }
 
     mist.Closed | mist.Shutdown -> actor.Stop(process.Normal)
@@ -176,10 +219,10 @@ fn serve_file(
   })
 }
 
-fn send_view(_req: Request(Connection), view: core.View(msg)) {
+fn send_view(_req: Request(Connection), id: String, view: core.View(msg)) {
   response.new(200)
   |> response.prepend_header("content-type", "text/html")
   |> response.set_body(
-    mist.Bytes(bytes_builder.from_string_builder(core.render(view))),
+    mist.Bytes(bytes_builder.from_string_builder(core.render(id, view))),
   )
 }

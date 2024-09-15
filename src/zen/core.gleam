@@ -8,6 +8,7 @@ import gleam/string_builder
 import zen/dom
 import zen/dom/events
 import zen/dom/id
+import zen/effects
 
 pub type Msg(msg) {
   Custom(msg)
@@ -19,14 +20,11 @@ pub type View(msg) {
   View(title: String, body: dom.DomNode(msg))
 }
 
-pub type Effect(msg, model) {
-  Effect(fn(model) -> Option(Msg(msg)))
-}
-
 pub type App(model, msg) {
   App(
     init: fn() -> model,
-    update: fn(model, Msg(msg)) -> #(model, List(Effect(msg, model))),
+    update: fn(model, Msg(msg)) ->
+      #(model, List(effects.Effect(Msg(msg), model))),
     view: fn(model) -> View(Msg(msg)),
     events: events.EventStore(Msg(msg)),
   )
@@ -71,13 +69,11 @@ pub fn prefix() -> string_builder.StringBuilder {
   )
 }
 
-pub fn middle() -> string_builder.StringBuilder {
-  string_builder.from_string(
-    "</title>
+pub fn middle(id: String) -> string_builder.StringBuilder {
+  string_builder.from_string("</title>
     </head>
-    <body>
-  ",
-  )
+    <body data-zen-id=\"" <> id <> "\">
+  ")
 }
 
 pub fn suffix() -> string_builder.StringBuilder {
@@ -91,12 +87,12 @@ pub fn app(init, update, view) -> App(model, msg) {
   App(init, update, view, events.empty_event_store())
 }
 
-pub fn render(view: View(msg)) -> string_builder.StringBuilder {
+pub fn render(id: String, view: View(msg)) -> string_builder.StringBuilder {
   let View(title, body) = view
   string_builder.concat([
     prefix(),
     string_builder.from_string(title),
-    middle(),
+    middle(id),
     dom.render_node(dom.assign_ids(id.root(), body)),
     suffix(),
   ])
@@ -134,13 +130,8 @@ pub fn update(
   app: App(model, msg),
   model: model,
   msg: Msg(msg),
-) -> #(model, List(Effect(msg, model))) {
+) -> #(model, List(effects.Effect(Msg(msg), model))) {
   app.update(model, msg)
-}
-
-pub fn run_effect(model: model, effect: Effect(msg, model)) -> Option(Msg(msg)) {
-  let Effect(f) = effect
-  f(model)
 }
 
 pub fn diff(view1: View(msg), view2: View(msg)) -> List(dom.Diff(msg)) {

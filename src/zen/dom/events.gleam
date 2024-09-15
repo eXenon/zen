@@ -18,6 +18,7 @@ pub type EventPayloadCoordinates {
 pub type EventHandler(msg) {
   Click(fn() -> msg)
   MouseOver(fn(EventPayloadCoordinates) -> msg)
+  Input(fn(String) -> msg)
 }
 
 pub type EventHandlers(msg) =
@@ -43,6 +44,7 @@ pub fn event_handler_name(event_handler: EventHandler(msg)) -> String {
   case event_handler {
     Click(_) -> "click"
     MouseOver(_) -> "mouseover"
+    Input(_) -> "input"
   }
 }
 
@@ -69,6 +71,11 @@ pub fn event_payload_decoder(
         )(payload)
       {
         Ok(coordinates) -> Ok(handler(coordinates))
+        Error(_) -> Error(DecodeError)
+      }
+    Input(handler) ->
+      case dynamic.string(payload) {
+        Ok(input) -> Ok(handler(input))
         Error(_) -> Error(DecodeError)
       }
   }

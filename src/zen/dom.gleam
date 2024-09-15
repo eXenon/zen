@@ -2,18 +2,17 @@ import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string_builder
-import utils
 import zen/dom/attributes.{type Attribute, to_string as attribute_to_string}
 import zen/dom/events.{
-  type EventHandler, type EventHandlers, type EventPayloadCoordinates, Click,
-  MouseOver, event_handler_name, event_handler_names,
+  type EventHandler, type EventHandlers, event_handler_name, event_handler_names,
 }
 import zen/dom/id.{type Id, child, encode_id, print_id}
+import zen/utils
 
 // Types
 
 pub type Node {
-  N(String)
+  N(tag: String)
 }
 
 pub type DomNode(msg) {
@@ -36,8 +35,29 @@ pub type DomNodeWithId(msg) {
     children: List(DomNodeWithId(msg)),
     events: EventHandlers(msg),
   )
-  TextWI(Id, String)
+  TextWI(id: Id, text: String)
 }
+
+// ----------------------------------------------------------------------------
+// Node encoding
+// ----------------------------------------------------------------------------
+
+pub fn node_encoder(node: DomNodeWithId(msg)) -> json.Json {
+  case node {
+    ElementWI(id, n, a, c, e) ->
+      json.object([
+        #("id", encode_id(id)),
+        #("tag", json.string(n.tag)),
+        #("attributes", json.object(list.map(a, attributes.to_json))),
+        #("children", json.array(c, node_encoder)),
+        #("events", json.array(list.map(e, event_handler_name), json.string)),
+      ])
+    TextWI(id, text) ->
+      json.object([#("id", encode_id(id)), #("text", json.string(text))])
+  }
+}
+
+// ----------------------------------------------------------------------------
 
 pub fn assign_ids(current_id: Id, node: DomNode(msg)) -> DomNodeWithId(msg) {
   case node {
@@ -52,13 +72,6 @@ pub fn assign_ids(current_id: Id, node: DomNode(msg)) -> DomNodeWithId(msg) {
         events: e,
       )
     Text(t) -> TextWI(current_id, t)
-  }
-}
-
-pub fn id_of(node: DomNodeWithId(msg)) -> Id {
-  case node {
-    ElementWI(i, _, _, _, _) -> i
-    TextWI(i, _) -> i
   }
 }
 
@@ -89,7 +102,7 @@ pub fn render_events(
   event_handlers: EventHandlers(msg),
 ) -> string_builder.StringBuilder {
   string_builder.concat([
-    string_builder.from_string("data-event=\""),
+    string_builder.from_string("data-zen-event=\""),
     string_builder.join(
       list.map(event_handlers, fn(h) {
         h |> event_handler_name |> string_builder.from_string
@@ -173,7 +186,7 @@ pub fn diff_children(
     case old, new {
       None, None -> []
       None, Some(new) -> [Append(parent_id, new)]
-      Some(old), None -> [Delete(id_of(old))]
+      Some(old), None -> [Delete(old.id)]
       Some(old), Some(new) -> {
         diff(current_id, old, new)
       }
@@ -210,19 +223,19 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
       json.object([
         #("action", json.string("update")),
         #("selector", encode_id(selector)),
-        #("value", json.string(string_builder.to_string(render_node(inner)))),
+        #("value", node_encoder(inner)),
       ])
     Append(selector, inner) ->
       json.object([
         #("action", json.string("append")),
         #("selector", encode_id(selector)),
-        #("value", json.string(string_builder.to_string(render_node(inner)))),
+        #("value", node_encoder(inner)),
       ])
     Prepend(selector, inner) ->
       json.object([
         #("action", json.string("prepend")),
         #("selector", encode_id(selector)),
-        #("value", json.string(string_builder.to_string(render_node(inner)))),
+        #("value", node_encoder(inner)),
       ])
     Delete(selector) ->
       json.object([
@@ -233,15 +246,7 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
       json.object([
         #("action", json.string("updateproperties")),
         #("selector", encode_id(selector)),
-        #(
-          "properties",
-          json.object(
-            list.map(properties, fn(a) {
-              let #(name, value) = attribute_to_string(a)
-              #(name, json.string(value))
-            }),
-          ),
-        ),
+        #("properties", json.object(list.map(properties, attributes.to_json))),
       ])
     UpdateText(selector, text) ->
       json.object([
@@ -257,59 +262,4 @@ pub fn encode(diff: Diff(msg)) -> json.Json {
         #("remove", json.array(remove, json.string)),
       ])
   }
-}
-
-// Builders
-
-pub fn on_click(node: DomNode(msg), handler: fn() -> msg) -> DomNode(msg) {
-  case node {
-    Element(n, a, c, e) ->
-      Element(node: n, attributes: a, children: c, events: [Click(handler), ..e])
-    Text(_) -> node
-  }
-}
-
-pub fn on_mouse_over(
-  node: DomNode(msg),
-  handler: fn(EventPayloadCoordinates) -> msg,
-) -> DomNode(msg) {
-  case node {
-    Element(n, a, c, e) ->
-      Element(node: n, attributes: a, children: c, events: [
-        MouseOver(handler),
-        ..e
-      ])
-    Text(_) -> node
-  }
-}
-
-// Convenience functions
-
-pub fn div(
-  attributes: List(Attribute),
-  children: List(DomNode(msg)),
-) -> DomNode(msg) {
-  Element(N("div"), attributes, children, [])
-}
-
-pub fn button(
-  attributes: List(Attribute),
-  children: List(DomNode(msg)),
-) -> DomNode(msg) {
-  Element(N("button"), attributes, children, [])
-}
-
-pub fn text(text: String) -> DomNode(msg) {
-  Text(text)
-}
-
-pub fn input(attributes: List(Attribute)) -> DomNode(msg) {
-  Element(N("input"), attributes, [], [])
-}
-
-pub fn span(
-  attributes: List(Attribute),
-  children: List(DomNode(msg)),
-) -> DomNode(msg) {
-  Element(N("span"), attributes, children, [])
 }

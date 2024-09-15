@@ -1,6 +1,15 @@
 const LISTENERS = {}
 const LOCK = false
+const ZEN_NODES = {};
 const ttdebugger = timeTravelDebugger()
+
+function initialValuesSet() {
+  // Why do I even need this?
+  const inputs = document.querySelectorAll('input[type="text"]');
+  for (const input of inputs) {
+    input.value = input.getAttribute('value')
+  }
+}
 
 function openWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -10,13 +19,14 @@ function openWebSocket() {
 
   ws.onopen = () => {
     console.log('WebSocket connection established');
-    ws.send("ping");
+    //ws.send("ping");
+    ws.send("init+" + document.body.getAttribute('data-zen-id'));
     // Schedule heartbeat every second
-    setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send("ping");
-      }
-    }, HEARTBEAT_INTERVAL);
+    // setInterval(() => {
+    //   if (ws.readyState === WebSocket.OPEN) {
+    //     ws.send("ping");
+    //   }
+    // }, HEARTBEAT_INTERVAL);
   };
 
   ws.onmessage = (event) => {
@@ -27,8 +37,7 @@ function openWebSocket() {
       }
       const message = JSON.parse(event.data);
       ttdebugger.addMessage(message)
-      apply(message);
-      setEventListeners(ws);
+      apply(ws, message);
       ttdebugger.addState(document.getElementById('root').innerHTML);
     } catch (error) {
       console.error('Error parsing WebSocket message:', error);
@@ -46,66 +55,50 @@ function openWebSocket() {
   return ws;
 }
 
-function apply(message) {
+function apply(ws, message) {
   if (message.title !== undefined) {
     document.title = message.title
   }
   if (message.body) {
-    document.body.innerHTML = message.body;
+    const root = document.getElementById('root');
+    root.innerHTML = '';
+    root.appendChild(jsonToDOM(ws, message.body));
   } else if (message.diff) {
-    applyDiff(message.diff);
-    removeMarkedNodes();
+    applyDiff(ws, message.diff);
   } else {
     console.error('Invalid message format: neither body nor diff found');
   }
 }
 
 function isProtectedAttribute(attr) {
-  return attr == "id" || attr.slice(0, 10) == "data-event"
+  return attr.slice(0, 8) == "data-zen-"
 }
 
-function applyDiff(diff) {
+function applyDiff(ws, diff) {
   for (const change of diff) {
-    const element = findNodeByIntList(change.selector);
+    const element = ZEN_NODES[change.selector];
     if (element) {
       switch (change.action) {
         case 'update':
-          element.outerHTML = change.value;
+          element.replaceWith(jsonToDOM(ws, change.value));
           break;
         case 'append':
-          element.insertAdjacentHTML('beforeend', change.value);
+          element.appendChild(jsonToDOM(ws, change.value));
           break;
         case 'prepend':
-          element.insertAdjacentHTML('afterbegin', change.value);
+          element.insertBefore(jsonToDOM(ws, change.value), element.firstChild);
           break;
         case 'delete':
-          element.setAttribute("data-mark-delete", "1");
+          element.remove();
           break;
         case 'updateproperties':
-          for (const attr in element.getAttributeNames()) {
-            // id is a protected category
-            if (!isProtectedAttribute(attr)) {
-              element.removeAttribute(attr)
-            }
-          }
-          for (const [key, value] of Object.entries(change.properties)) {
-            if (!isProtectedAttribute(attr)) {
-              element.setAttribute(key, value)
-            }
-          }
+          updateElementProperties(element, change.properties);
           break;
         case 'updatetext':
           element.textContent = change.value;
           break;
         case 'updateevents':
-          for (const eventName of change.remove) {
-            if (LISTENERS[element.id] && LISTENERS[element.id][eventName]) {
-              console.log('removing event listener for', eventName, 'on', element)
-              element.removeEventListener(eventName, LISTENERS[element.id][eventName])
-            }
-            element.removeAttribute('data-listener-' + eventName + '-set')
-          }
-          element.setAttribute('data-event', change.value.join(","))
+          updateElementEvents(element, change.remove, change.value);
           break;
         default:
           console.error('Unknown diff action:', change.action);
@@ -116,17 +109,36 @@ function applyDiff(diff) {
   }
 }
 
-function removeMarkedNodes() {
-  const markedNodes = document.querySelectorAll('[data-mark-delete]');
-  for (const node of markedNodes) {
-    node.remove();
+function updateElementProperties(element, properties) {
+  for (const attr of element.getAttributeNames()) {
+    if (!isProtectedAttribute(attr)) {
+      element.removeAttribute(attr);
+    }
   }
+  for (const [key, value] of Object.entries(properties)) {
+    if (!isProtectedAttribute(key)) {
+      element.setAttribute(key, value);
+    }
+    if (key === "value") {
+      element.value = value;
+    }
+  }
+}
+
+function updateElementEvents(element, removeEvents, addEvents) {
+  for (const eventName of removeEvents) {
+    if (LISTENERS[element.id] && LISTENERS[element.id][eventName]) {
+      console.log('removing event listener for', eventName, 'on', element);
+      element.removeEventListener(eventName, LISTENERS[element.id][eventName]);
+    }
+    element.removeAttribute('data-zen-listener-' + eventName + '-set');
+  }
+  element.setAttribute('data-zen-event', addEvents.join(","));
 }
 
 function payloadForEvent(eventName, event) {
   switch (eventName) {
     case 'click':
-      console.log('click event', event);
       return {
         x: event.clientX,
         y: event.clientY
@@ -136,6 +148,8 @@ function payloadForEvent(eventName, event) {
         x: event.clientX,
         y: event.clientY
       };
+    case 'input':
+      return event.target.value;
     default:
       return {};
   }
@@ -153,26 +167,6 @@ function idToPath(id) {
   }
 }
 
-function findNodeByIntList(intList) {
-  let node = document.getElementById('root'); // Start at the root
-  if (intList == "root") {
-    return node
-  }
-
-  const reversedList = [...intList].reverse();
-  
-  for (const index of reversedList) {
-    if (node.childNodes.length > index) {
-      node = node.childNodes[index];
-    } else {
-      console.error('Invalid path: child index out of bounds', index);
-      return null;
-    }
-  }
-  
-  return node;
-}
-
 function pathToHandler(path) {
   if (path.length == 0) {
     return "root"
@@ -180,41 +174,57 @@ function pathToHandler(path) {
   return path
 }
 
-function setEventListeners(ws) {
-  const targets = document.querySelectorAll('[data-event]');
-  for (const target of targets) {
-    const eventNames = target.getAttribute('data-event').split(",");
-    const id = target.getAttribute('id');
-    const path = idToPath(id);
-    const handler = pathToHandler(path);
-    
-    // Check if the event listener is already set
-    for (const eventName of eventNames) {
-      if (eventName !== "" && !target.hasAttribute('data-listener-' + eventName + '-set')) {
-        const eventHandler = (event) => {
-          ws.send(JSON.stringify({
-            handler: handler,
-            name: eventName,
-            payload: payloadForEvent(eventName, event)
-          }));
-        };
-        if (!LISTENERS[id]) {
-          LISTENERS[id] = {}
-        }
-        LISTENERS[id][eventName] = eventHandler
-        target.addEventListener(eventName, eventHandler);
-        
-        // Mark this element as having a listener set
-        target.setAttribute('data-listener-' + eventName + '-set', 'true');
+function jsonToDOM(ws, node) {
+  if (node.tag === undefined) {
+    // Handle text nodes separately
+    const textNode = document.createTextNode(node.text || "");
+    ZEN_NODES[node.id] = textNode;
+    return textNode;
+  }
+
+  const element = document.createElement(node.tag);
+  const id = node.id;
+
+  if (node.attributes) {
+    for (const [key, value] of Object.entries(node.attributes)) {
+      element.setAttribute(key, value);
+      if (key === "value") {
+        element.value = value;
       }
     }
   }
+
+  if (node.events) {
+    for (const eventName of node.events) {
+      element.addEventListener(eventName, (event) => {
+        ws.send(JSON.stringify({
+          handler: id,
+          name: eventName,
+          payload: payloadForEvent(eventName, event)
+        }));
+      });
+    }
+  }
+
+  if (node.children) {
+    for (const child of node.children) {
+      element.appendChild(jsonToDOM(ws, child));
+    }
+  }
+
+  if (node.text) {
+      element.textContent = node.text;
+  }
+
+  ZEN_NODES[node.id] = element;
+  return element;
 }
+
 
 document.addEventListener('DOMContentLoaded', () => {
   ttdebugger.init(document.body.getAttribute('debug') === 'true');
   ttdebugger.addState(document.getElementById('root').innerHTML);
   ttdebugger.addMessage('init');
   const ws = openWebSocket();
-  setEventListeners(ws);
+  initialValuesSet();
 });

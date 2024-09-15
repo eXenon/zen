@@ -1,3 +1,5 @@
+import gleam/json
+
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
@@ -17,5 +19,13 @@ pub fn to_string(attribute: Attribute) -> #(String, String) {
     Value(value) -> #("value", value)
     TextInput -> #("type", "text")
     Attribute(name, value) -> #(name, value)
+  }
+}
+
+pub fn to_json(attribute: Attribute) -> #(String, json.Json) {
+  case attribute {
+    Value(value) -> #("value", json.string(value))
+    TextInput -> #("type", json.string("text"))
+    Attribute(name, value) -> #(name, json.string(value))
   }
 }
